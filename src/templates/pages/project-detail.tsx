@@ -1433,7 +1433,19 @@ export function ProjectDetailPage({
             <label style="display:flex;gap:10px;align-items:center"><input id="cfg-checks-enabled" type="checkbox" disabled /> Run checks after each build</label>
             <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/build-stage-settings.js?v=20261020-single-checks"></script>
+          <script src="/public/js/build-stage-settings.js?v=20261119-run-on"></script>
+          <div class="agent-card">
+            <div class="agent-card-head"><div><h3>Where builds run</h3><p>Where ticket builds and the preview run for this project. A ticket's own Build with choice still wins.</p></div></div>
+            <div class="cfg-field" style="max-width:340px;">
+              <span class="cfg-field-label">Run builds and previews</span>
+              <select class="cfg-select" id="cfg-run-on" disabled>
+                <option value="cloud">In an LFG sandbox</option>
+                <option value="computer">On each person's computer (LFG Desktop)</option>
+                <option value="">Each person's own setting</option>
+              </select>
+            </div>
+            <p id="cfg-run-on-status" role="status" style="font-size:12px;color:var(--text-secondary)"></p>
+          </div>
           <div class="agent-card">
             <div class="agent-card-head">
               <div>

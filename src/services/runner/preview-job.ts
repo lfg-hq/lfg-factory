@@ -23,7 +23,7 @@ import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { cancelJob, connectedRunnerFor, enqueueJob } from "./hub.ts";
 import { localAiSettings } from "./opt-in.ts";
-import { ticketBuildWith } from "./build-target.ts";
+import { projectRunOn, ticketBuildWith } from "./build-target.ts";
 import { RUNNER_PROTOCOL_VERSION, type PreviewPayload, type PreviewPhase, type PreviewPlan, type PreviewStep, type PreviewUpdate, type PreviewUrl } from "./protocol.ts";
 
 /** Oldest runner protocol that knows how to run a preview. */
@@ -35,14 +35,21 @@ export type PreviewWhere = { where: "computer" } | { where: "cloud"; reason?: st
  * Where this person's preview runs. The computer, when "Use my computer for AI" is on,
  * unless they asked for the cloud or the ticket being previewed is set to build in the cloud.
  */
-export async function resolvePreviewWhere(userId: string, opts: { requested?: unknown; ticketId?: string | null } = {}): Promise<PreviewWhere> {
+export async function resolvePreviewWhere(userId: string, opts: { requested?: unknown; ticketId?: string | null; projectId?: string } = {}): Promise<PreviewWhere> {
   if (opts.requested === "cloud") return { where: "cloud" };
-  const settings = await localAiSettings(userId);
-  if (!settings.enabled) return { where: "cloud" };
+  // The ticket's own Build with choice wins, then the project's setting, then the person's.
+  let ticketChoice: ReturnType<typeof ticketBuildWith> = null;
   if (opts.ticketId) {
     const [ticket] = await db.select({ details: projectTickets.details }).from(projectTickets).where(eq(projectTickets.id, opts.ticketId)).limit(1);
-    if (ticketBuildWith(ticket?.details) === "cloud") return { where: "cloud", reason: "This ticket is set to build in the cloud, so its preview runs there too." };
+    ticketChoice = ticketBuildWith(ticket?.details);
+    if (ticketChoice === "cloud") return { where: "cloud", reason: "This ticket is set to build in the cloud, so its preview runs there too." };
   }
+  if (!ticketChoice && opts.projectId && opts.requested !== "computer") {
+    const [p] = await db.select({ runOn: projects.runOn }).from(projects).where(eq(projects.id, opts.projectId)).limit(1);
+    if (projectRunOn(p?.runOn) === "cloud") return { where: "cloud" };
+  }
+  const settings = await localAiSettings(userId);
+  if (!settings.enabled) return { where: "cloud" };
   return { where: "computer" };
 }
 

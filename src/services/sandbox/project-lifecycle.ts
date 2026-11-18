@@ -1,11 +1,16 @@
 import type { JobInfo } from './types.ts';
 
+const ENDED = new Set(['completed', 'stopped', 'error', 'failed', 'cancelled']);
+
 /** Never infer that a disk is free from a timeout, missing lookup, or job status. */
 export async function ensureProjectVm(options: {
   mayCreate: boolean;
   find: () => Promise<JobInfo | null>;
   probe: (job: JobInfo) => Promise<void>;
   create: () => Promise<unknown>;
+  /** Provider confirmation that this ended job no longer holds the workspace disk
+   *  (e.g. it completed long enough ago). Without it, an ended job blocks replacement. */
+  released?: (job: JobInfo) => Promise<boolean>;
 }): Promise<{ created: boolean }> {
   let job = await options.find(); // Lookup errors must not become permission to create.
   if (!job && options.mayCreate) {
@@ -21,6 +26,10 @@ export async function ensureProjectVm(options: {
       await options.probe(job);
       return { created: true };
     }
+  }
+  if (job && ENDED.has(job.status) && options.released && await options.released(job)) {
+    await options.create();
+    return { created: true };
   }
   if (!job || !['running', 'sleeping'].includes(job.status)) {
     throw new Error(`Sandbox is ${job?.status ?? 'not found'}. Automatic replacement is blocked until the provider confirms the previous VM released its disk. Retry to check the existing job; do not create another VM for this workspace.`);

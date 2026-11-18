@@ -20,7 +20,7 @@ import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
-import { newWorkspaceV2, execOnWorkspace, findJob, stopWorkspace } from "./mags.ts";
+import { newWorkspaceV2, execOnWorkspace, findJob, stopWorkspace, getJobStatus } from "./mags.ts";
 import { dockerBringup } from "./database-bringup.ts";
 import { env } from "../config/env.ts";
 import { ensureProjectVm, singleFlight } from "./sandbox/project-lifecycle.ts";
@@ -149,6 +149,15 @@ function generatePassword(): string {
   return "Lp" + raw.slice(0, 26) + "9x"; // alnum-only, DB-safe, no shell metachars
 }
 
+/** An ended job is done with its disk once the provider reports it finished more than
+ *  RELEASE_SETTLE_MS ago (time for the final workspace sync), and it is not still running. */
+export const RELEASE_SETTLE_MS = 10 * 60_000;
+export function vmReleasedDisk(st: { status?: string; completed_at?: unknown }, now = Date.now()): boolean {
+  if (!["completed", "stopped", "error", "failed", "cancelled"].includes(String(st.status))) return false;
+  const at = typeof st.completed_at === "string" ? Date.parse(st.completed_at) : NaN;
+  return Number.isFinite(at) && now - at > RELEASE_SETTLE_MS;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Resolve the project's (RANDOM, unguessable) sandbox workspace id from the DB.
@@ -193,6 +202,13 @@ async function ensureProjectSandboxOnce(projectId: string): Promise<{ workspaceI
       vcpus: 4, memoryMb: 8192, diskGb: PREVIEW_VM_DISK_GB, keepAlive: true,
       rootfsType: process.env.PREVIEW_ROOTFS || "pi",
     }),
+    // A VM that ended a while ago has synced and released its disk: start a new one on it.
+    released: async (job) => {
+      const st = await getJobStatus(job.jobId);
+      const ok = vmReleasedDisk(st);
+      console.log(`[project-sandbox] ${workspaceId} job ${job.jobId} is ${st.status} (completed_at ${st.completed_at ?? "-"}); ${ok ? "starting a new VM on its workspace" : "not yet confirmed released"}`);
+      return ok;
+    },
   });
   await db.update(projectEnvironments).set({ status: "running", lastAwakeAt: new Date(), updatedAt: new Date() })
     .where(eq(projectEnvironments.projectId, projectId));

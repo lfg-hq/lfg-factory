@@ -1037,6 +1037,11 @@ const FRESH_SANDBOX_NOTE = `
 This sandbox was started fresh (the prepared preview could not be copied), so dependencies, build output and local settings are not installed. Install dependencies with the project's own install command (see package.json, README or lockfile) before building, running or testing. Do not commit generated files.`;
 
 // Concurrency guard: only one ticket per project at a time
+/** Codex models to try, in order, when the ChatGPT plan refuses the configured one. */
+export const CODEX_PLAN_FALLBACKS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"];
+/** OpenAI's answer when a ChatGPT account can't use a Codex model. */
+export const planRejectsModel = (text: string) => /model is not supported when using Codex with a ChatGPT account/i.test(text);
+
 const executingProjects = new Set<string>();
 // Per-ticket in-flight guard. Prevents the same ticket from executing twice
 // concurrently — from double-clicks, a retried queue after a UI error, the
@@ -1049,9 +1054,10 @@ const executingTickets = new Set<string>();
 
 /** Where this person's build of this ticket runs: the ticket's own choice, else their setting. */
 async function buildTargetFor(ticketId: string, actorId: string | undefined) {
-  const { resolveBuildTarget } = await import("../services/runner/build-target.ts");
-  const [row] = await db.select({ details: projectTickets.details }).from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
-  return resolveBuildTarget(actorId, row?.details);
+  const { resolveBuildTarget, projectRunOn } = await import("../services/runner/build-target.ts");
+  const [row] = await db.select({ details: projectTickets.details, runOn: projects.runOn }).from(projectTickets)
+    .innerJoin(projects, eq(projects.id, projectTickets.projectId)).where(eq(projectTickets.id, ticketId)).limit(1);
+  return resolveBuildTarget(actorId, row?.details, projectRunOn(row?.runOn));
 }
 
 /** Hand a build or a ticket-chat follow-up to the person's own computer. */
@@ -3545,7 +3551,8 @@ git branch --show-current
   let workSummary = ""; // Pi's "here's what I did" summary, for the completion message
 
   // Provider/native model id for the Pi in-sandbox coding agent (provider up top).
-  const piModelId = getProviderModel(modelKey) ?? modelKey;
+  let piModelId = getProviderModel(modelKey) ?? modelKey;
+  const triedModels = new Set<string>([piModelId]);
   const providerApiKey = provider
     ? ({
         anthropic: userKeys?.anthropicApiKey,
@@ -3718,6 +3725,20 @@ git branch --show-current
             ? `⟳ Lost contact with the build VM (transient — your work is safe on /data). Reconnecting and continuing (retry ${infraResumes} of ${MAX_INFRA_RESUMES})…`
             : `⟳ Build didn't finish (${reason}) — resuming where it left off (attempt ${workResumes} of ${MAX_BUILD_RESUMES})…`, "command", ownerId);
           await sleep(2500); // let the VM settle after the kill
+          continue;
+        }
+
+        // The ChatGPT plan doesn't offer every Codex model on every account. When OpenAI says
+        // so, start over on the next model it does offer instead of failing the build.
+        const fallback = useOpenAICodex && planRejectsModel(`${reason}\n${piResult.tail.slice(-4000)}`)
+          ? CODEX_PLAN_FALLBACKS.find((m) => !triedModels.has(m))
+          : undefined;
+        if (fallback) {
+          await killPiInVm(workspaceId, pi.backgroundPid);
+          await addLog(ticketId, `${piModelId} isn't available on this ChatGPT plan; building with ${fallback} instead.`, "command", ownerId);
+          piModelId = fallback;
+          triedModels.add(fallback);
+          await sleep(1500);
           continue;
         }
 

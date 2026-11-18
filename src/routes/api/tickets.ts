@@ -161,7 +161,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
       ...ticket,
       agentBusy: isChatTurnActive(ticket.id),
       ...ticketCheckSettings(project, ticket.details),
-      ...(await ticketBuildSettings(user.id, ticket.details)),
+      ...(await ticketBuildSettings(user.id, ticket.details, access.project)),
       anchorBranch: anchor.anchorBranch,
       epicBranch: anchor.epic?.branch ?? null,
       epicKey: anchor.epic?.epicKey ?? null,
@@ -307,13 +307,14 @@ ticketsApi.post("/:projectId/tickets/:ticketId/checks", async (c) => {
 });
 
 /** Where this ticket builds, for the ticket's "Build with" picker. */
-async function ticketBuildSettings(userId: string, details: unknown) {
-  const { ticketBuildWith } = await import("../../services/runner/build-target.ts");
+async function ticketBuildSettings(userId: string, details: unknown, project: { runOn?: string | null }) {
+  const { ticketBuildWith, projectRunOn } = await import("../../services/runner/build-target.ts");
   const { localAiSettings, installedAgents } = await import("../../services/runner/opt-in.ts");
   const settings = await localAiSettings(userId);
   return {
     buildWith: ticketBuildWith(details),
-    buildDefault: settings.enabled ? settings.agent : "cloud",
+    // The project's setting comes before the person's own.
+    buildDefault: projectRunOn(project.runOn) === "cloud" || !settings.enabled ? "cloud" : settings.agent,
     computerEnabled: settings.enabled,
     computerAgents: settings.enabled ? (await installedAgents(userId)).map((a) => a.kind) : [],
   };
@@ -335,7 +336,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/build-with", async (c) => {
   const details = { ...((ticket.details && typeof ticket.details === "object") ? ticket.details as Record<string, unknown> : {}) };
   if (body.buildWith === "default") delete details.buildWith; else details.buildWith = body.buildWith;
   await db.update(projectTickets).set({ details, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId!));
-  return c.json({ ok: true, ...(await ticketBuildSettings(user.id, details)) });
+  return c.json({ ok: true, ...(await ticketBuildSettings(user.id, details, access.project)) });
 });
 
 // ── POST /:projectId/tickets/:ticketId/skip-checks — keep the saved build, continue ──

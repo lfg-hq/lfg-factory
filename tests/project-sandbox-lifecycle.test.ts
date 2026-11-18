@@ -93,3 +93,24 @@ describe('provider job lookup', () => {
     })).rejects.toThrow('network failure');
   });
 });
+
+describe('replacing an ended VM', () => {
+  test('a provider-confirmed release lets an ended job be replaced once', async () => {
+    let creates = 0, checked = 0;
+    const r = await ensureProjectVm({ mayCreate: false, find: async () => job('completed'),
+      probe: async () => {}, create: async () => { creates++; }, released: async () => { checked++; return true; } });
+    expect(r.created).toBe(true); expect(creates).toBe(1); expect(checked).toBe(1);
+  });
+  test('an unconfirmed release still blocks', async () => {
+    let creates = 0;
+    await expect(ensureProjectVm({ mayCreate: false, find: async () => job('completed'),
+      probe: async () => {}, create: async () => { creates++; }, released: async () => false })).rejects.toThrow('Automatic replacement is blocked');
+    expect(creates).toBe(0);
+  });
+  for (const status of ['provisioning', 'queued']) test(`an in-flight ${status} job is never released`, async () => {
+    let creates = 0, checked = 0;
+    await expect(ensureProjectVm({ mayCreate: false, find: async () => job(status),
+      probe: async () => {}, create: async () => { creates++; }, released: async () => { checked++; return true; } })).rejects.toThrow('Automatic replacement is blocked');
+    expect(creates).toBe(0); expect(checked).toBe(0);
+  });
+});

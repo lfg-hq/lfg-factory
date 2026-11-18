@@ -63,7 +63,7 @@ export async function createTicketOperation(input:{ticketId:string;projectId:str
  const id=operationId(input.ticketId,input.conversationId,input.turnId,input.message);
  const {getPreviewState}=await import('./dev-preview.ts');
  const local=await import('./runner/preview-job.ts');
- const preview=(await local.resolvePreviewWhere(input.userId)).where==='computer'?await local.localPreviewState(input.userId,input.projectId).catch(()=>null):await getPreviewState(input.projectId).catch(()=>null);
+ const preview=(await local.resolvePreviewWhere(input.userId,{projectId:input.projectId})).where==='computer'?await local.localPreviewState(input.userId,input.projectId).catch(()=>null):await getPreviewState(input.projectId).catch(()=>null);
  const operation:TicketOperation={id,ticketId:input.ticketId,projectId:input.projectId,publicProjectId:project.projectId,conversationId:input.conversationId,userId:input.userId,selectedBranch:preview?.branch,requestHash,status:'queued',detail:'Repair or question queued for the ticket agent.',updatedAt:new Date().toISOString()};
  const inserted=await db.insert(ticketLogs).values({id,ticketId:input.ticketId,logType:'chat_operation',command:'Chat follow-up',output:JSON.stringify(operation)}).onConflictDoNothing().returning({id:ticketLogs.id});
  return {operation:(await readTicketOperation(id))!,created:inserted.length>0};
@@ -147,7 +147,7 @@ async function workRecap(ticketId:string,since:Date,title:string,fallback?:strin
 async function finishPublishedOperation(op:TicketOperation,since=new Date(Date.parse(op.updatedAt))) {
  const {getPreviewState,restartPreview}=await import('./dev-preview.ts');
  const local=await import('./runner/preview-job.ts');
- const onComputer=(await local.resolvePreviewWhere(op.userId)).where==='computer';
+ const onComputer=(await local.resolvePreviewWhere(op.userId,{projectId:op.projectId})).where==='computer';
  const state=onComputer?await local.localPreviewState(op.userId,op.projectId).catch(()=>null):await getPreviewState(op.projectId).catch(()=>null);
  const selected=state?.branch || '(default)';
  const publication=op.publication!;

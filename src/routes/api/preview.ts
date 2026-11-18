@@ -37,7 +37,7 @@ previewApi.get("/:projectId/preview", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c) });
+  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c), projectId: access.project.id });
   if (where.where === "computer") return c.json(await localPreviewState(user.id, access.project.id));
   return c.json({ ...(await getPreviewState(access.project.id)), where: "cloud", computerAvailable: (await localAiSettings(user.id)).enabled });
 });
@@ -59,7 +59,7 @@ previewApi.post("/:projectId/preview/setup", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const internalId = access.project.id;
 
-  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body) })).where === "computer") {
+  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body), projectId: access.project.id })).where === "computer") {
     return startOnComputer(c, async () => startLocalPreview({
       projectId: internalId, userId: user.id, refresh: true,
       ...(typeof body.branch === "string" ? await resolvePreviewBranch(internalId, { branch: body.branch }) : {}),
@@ -87,7 +87,7 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   // ticket. Ignored when a ticketId is present; that resolves its own branch.
   const branch = typeof body.branch === "string" && body.branch ? body.branch : undefined;
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
-  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body), ticketId });
+  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body), ticketId, projectId: access.project.id });
   if (where.where === "computer") {
     return startOnComputer(c, async () => startLocalPreview(body.refresh === true
       ? { projectId: access.project.id, userId: user.id, refresh: true, ...(await resolvePreviewBranch(access.project.id, { ticketId, branch })) }
@@ -319,6 +319,8 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
     validationEnabled: access.project.validationEnabled !== false,
     featureTestingEnabled: access.project.featureTestingEnabled !== false,
     canChangeBuildStages: access.role === "owner",
+    // Where builds and previews run: "cloud" | "computer" | null (each person's setting).
+    runOn: (access.project as { runOn?: string | null }).runOn ?? null,
     customInstructions: p.customInstructions ?? "",
     meetingVoice: !!(access.project as { meetingVoice?: boolean }).meetingVoice,
     // Spoken replies need the server's OpenAI key; without it the switch can't do anything.
@@ -364,6 +366,12 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
     if (typeof body[field] !== "string") continue;
     if (access.role !== "owner") return c.json({ error: "Only the project owner can fix models for everyone." }, 403);
     patch[col] = body[field] === "" ? null : body[field];
+  }
+  // Where this project's builds and previews run. Owner-only: it decides whose machine runs them.
+  if (body.runOn !== undefined) {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change where builds run." }, 403);
+    if (body.runOn !== "" && body.runOn !== null && body.runOn !== "cloud" && body.runOn !== "computer") return c.json({ error: "runOn must be cloud, computer or empty." }, 400);
+    patch.runOn = body.runOn || null;
   }
   if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
   // Credential sharing lends the OWNER's Git token to collaborators — owner-only.
@@ -646,7 +654,7 @@ previewApi.post("/:projectId/preview/stop", async (c) => {
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
-  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body) })).where === "computer") {
+  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body), projectId: access.project.id })).where === "computer") {
     await stopLocalPreview(user.id, access.project.id);
     return c.json({ ok: true, where: "computer" });
   }

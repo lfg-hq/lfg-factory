@@ -260,7 +260,7 @@ async function finishRun(runId: string): Promise<void> {
   try {
     // "Use my computer for AI" on: the preview runs on the person's computer, not a cloud sandbox.
     const local = await import("./runner/preview-job.ts");
-    const res = (await local.resolvePreviewWhere(run.userId)).where === "computer"
+    const res = (await local.resolvePreviewWhere(run.userId, { projectId: run.projectId })).where === "computer"
       ? await local.startLocalPreview({ projectId: run.projectId, userId: run.userId, refresh: true, ...(await local.resolvePreviewBranch(run.projectId, { branch })) })
           .then(job => local.waitForLocalPreview(job.id, 15 * 60_000))
       : await (await import("./dev-preview.ts")).restartPreview(run.projectId, {
