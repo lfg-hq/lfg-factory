@@ -121,6 +121,7 @@ export const previewPage = tool({
     z.object({
       projectId: z.string(),
       userId: z.string().describe("The user's ID — used to push the preview into their chat"),
+      sourceFiles: z.array(z.string()).optional().describe("Only when you run in a local checkout of the project's repository (a chat on the user's computer): the paths of the app files you read there for the layout, navigation, affected page and styles. Counts as reading the source, like readDesignSource."),
       approximateReason: z.string().min(12).optional().describe("Only when the user accepts an approximate standalone mockup: explain which source files or visual references were unavailable. Do not silently fall back."),
       baselineId: z.string().optional().describe("Immutable actual app layout from captureDesignLayout. With this set, html/css/js describe ONLY the feature region, never the sidebar or app shell."),
       css: z.string().optional().describe("App-matching CSS embedded in a style block"),
@@ -137,11 +138,17 @@ export const previewPage = tool({
         ),
     })
   ),
-  execute: async ({ projectId, userId, name, html, css, js, data, epicId, baselineId, approximateReason }, options) => {
+  execute: async ({ projectId, userId, name, html, css, js, data, epicId, baselineId, approximateReason, sourceFiles }, options) => {
     const designApp = await designProject(projectId, userId);
-    const sourceRead = (options as unknown as { designSourceRead?: boolean }).designSourceRead === true;
+    const context = options as unknown as { designSourceRead?: boolean; localCheckout?: boolean };
+    // A chat on the user's computer reads the app from its checkout with its own file
+    // tools, which the server never sees; the files it names stand in for readDesignSource.
+    const localSource = context.localCheckout === true && (sourceFiles ?? []).filter(f => f.trim()).length >= 2;
+    const sourceRead = context.designSourceRead === true || localSource;
     if ((designApp.repoUrl || designApp.repoName) && !sourceRead && !baselineId && !approximateReason) {
-      return { saved: false, error: 'Read the actual layout, navigation, affected page and styles with readDesignSource before rendering. No sandbox or capture is required. Reload the design-feature skill. If source is unavailable, explain the gap and agree an approximate mockup; then pass approximateReason.' };
+      return { saved: false, error: context.localCheckout
+        ? 'Read the actual layout, navigation, affected page and styles first: from your local checkout of the repository (then list those files in sourceFiles) or with readDesignSource. If the source is unavailable, explain the gap and agree an approximate mockup; then pass approximateReason.'
+        : 'Read the actual layout, navigation, affected page and styles with readDesignSource before rendering. No sandbox or capture is required. Reload the design-feature skill. If source is unavailable, explain the gap and agree an approximate mockup; then pass approximateReason.' };
     }
     html = composeDesignPreview({ html, css, js, data });
     let fidelity = 'Approximate mockup — app layout not verified';

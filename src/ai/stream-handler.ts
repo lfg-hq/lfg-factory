@@ -1586,7 +1586,14 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
             }
           }
           if (toolOutput(event)?.error || toolOutput(event)?.warning) {
-            const detail = `${toolLabel(event.toolName)} incomplete — using available findings`;
+            // Say what went wrong. "Incomplete — using available findings" read like a
+            // partial search even when a tool refused outright (previewPage saved nothing).
+            const failure = toolOutput(event)?.error;
+            const reason = typeof failure === "string" ? failure.replace(/\s+/g, " ").trim() : "";
+            const short = reason.length > 140 ? reason.slice(0, 140).replace(/\s+\S*$/, "") + "…" : reason;
+            const detail = failure
+              ? `${toolLabel(event.toolName)} didn't finish${short ? `: ${short}` : ""}`
+              : `${toolLabel(event.toolName)} incomplete — using available findings`;
             noteActivity(detail, event.toolName, true);
             ws.send(JSON.stringify({
               type: "ai_chunk", chunk: "", is_final: false, is_notification: true,

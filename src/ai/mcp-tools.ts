@@ -30,6 +30,7 @@ export async function buildMcpTools(grant: TurnGrant): Promise<Record<string, an
     Object.assign(tools, (await import("./tools/note-tools.ts")).noteTools({ projectId: grant.projectId, userId: grant.userId }));
     if (project) tools.linkTicketDocuments = linkTicketDocumentsTool({ projectId: grant.projectId, publicProjectId: project.publicId, userId: grant.userId });
   }
-  tools = withConversationContext(tools, grant.conversationId, grant.userId, grant.projectId, grant.messageId);
+  // The agent runs on the user's computer and may read the app from a local checkout.
+  tools = withConversationContext(tools, grant.conversationId, grant.userId, grant.projectId, grant.messageId, { localCheckout: true });
   return tools;
 }
