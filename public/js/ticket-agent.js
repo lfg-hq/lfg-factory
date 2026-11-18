@@ -227,6 +227,7 @@
       input.placeholder = isBusy() ? "Agent is working — press ■ to stop and send…" : "Send a message to the agent…";
     }
     renderChecksButton();
+    renderBuildWith();
     const b = $("ta-build"); if (!b) return;
     if (isBusy()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>' + (isBuilding() ? "Building…" : "Working…"); }
     else { b.disabled = chatBusy || buildPending; b.style.opacity = b.disabled ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>' + (hasPreviousBuild(curMeta) ? "Re-build" : "Build"); b.title = hasPreviousBuild(curMeta) ? "Re-build this ticket" : "Build this ticket"; }
@@ -246,6 +247,44 @@
       (curMeta.checksMode === "project" ? " (project default). Click to change for this ticket only." : " (set for this ticket). Click to switch.");
     b.disabled = isBusy();
   }
+  // "Build with": this ticket's own build target, or the person's default.
+  const BUILD_LABELS = { claude: "Claude Code · my computer", codex: "Codex · my computer", copilot: "Copilot · my computer", cloud: "LFG cloud sandbox" };
+  function renderBuildWith() {
+    const sel = $("ta-buildwith"); if (!sel) return;
+    if (!curMeta || curMeta.buildDefault === undefined) { sel.style.display = "none"; return; }
+    const agents = curMeta.computerEnabled ? ["claude", "codex", "copilot"] : [];
+    const current = curMeta.buildWith || curMeta.buildDefault;
+    const opts = [...agents, "cloud"];
+    if (!opts.includes(current)) opts.unshift(current);
+    sel.innerHTML = "";
+    for (const v of opts) {
+      const o = document.createElement("option");
+      o.value = v;
+      const installed = !curMeta.computerAgents || !curMeta.computerAgents.length || curMeta.computerAgents.includes(v) || v === "cloud";
+      o.textContent = "Build with: " + (BUILD_LABELS[v] || v) + (v === curMeta.buildDefault ? " (default)" : "") + (installed ? "" : " (not found on your computer)");
+      sel.appendChild(o);
+    }
+    sel.value = current;
+    sel.style.display = "inline-block";
+    sel.title = current === "cloud"
+      ? "Builds in a fresh LFG cloud sandbox"
+      : "Builds on your computer with " + (BUILD_LABELS[current] || current).split(" · ")[0] + ", in a git worktree under ~/LFG (LFG Desktop must be open)";
+    sel.disabled = isBusy();
+  }
+  async function changeBuildWith() {
+    const sel = $("ta-buildwith"); if (!sel || !ticketId || !curMeta) return;
+    const want = sel.value;
+    const buildWith = want === curMeta.buildDefault ? "default" : want;
+    sel.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/build-with`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ buildWith }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "failed");
+      curMeta = Object.assign({}, curMeta, { buildWith: j.buildWith, buildDefault: j.buildDefault, computerEnabled: j.computerEnabled, computerAgents: j.computerAgents });
+      toast(want === "cloud" ? "This ticket will build in an LFG cloud sandbox." : "This ticket will build on your computer with " + (BUILD_LABELS[want] || want).split(" · ")[0] + ".");
+    } catch (e) { toast("Couldn't change where this builds: " + (e.message || e)); }
+    renderBuildWith();
+  }
   async function loadChecksSetting() {
     if (!ticketId) return;
     const id = ticketId;
@@ -253,8 +292,10 @@
       const r = await fetch(`/api/projects/${PID()}/tickets/${id}`, { credentials: "same-origin" });
       if (!r.ok || id !== ticketId) return;
       const t = (await r.json()).ticket || {};
-      curMeta = Object.assign({}, curMeta, { checksMode: t.checksMode, validationEnabled: t.validationEnabled, featureTestingEnabled: t.featureTestingEnabled, projectChecksEnabled: t.projectChecksEnabled });
+      curMeta = Object.assign({}, curMeta, { checksMode: t.checksMode, validationEnabled: t.validationEnabled, featureTestingEnabled: t.featureTestingEnabled, projectChecksEnabled: t.projectChecksEnabled,
+        buildWith: t.buildWith, buildDefault: t.buildDefault, computerEnabled: t.computerEnabled, computerAgents: t.computerAgents });
       renderChecksButton();
+      renderBuildWith();
     } catch (_) {}
   }
   async function toggleChecks() {
@@ -938,6 +979,7 @@
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-preview")?.addEventListener("click", previewTicket);
     $("ta-checks")?.addEventListener("click", toggleChecks);
+    $("ta-buildwith")?.addEventListener("change", changeBuildWith);
     $("ta-pane-git")?.addEventListener("click", (e) => {
       const round = e.target.closest("[data-git-round]");
       if (round) { loadGit(round.getAttribute("data-git-round")); return; }

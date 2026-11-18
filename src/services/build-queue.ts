@@ -217,7 +217,7 @@ async function dispatchNext(runId: string): Promise<string | null> {
     await logRunEvent(runId, item.id, "ticket_queued", { ticketId: item.ticketId });
     await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId, true);
     await reportBuildStatus(item.ticketId, "queued", "Build queued.");
-    emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId });
+    emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId, ...(run.userId ? { actorId: run.userId } : {}) });
     return item.ticketId;
   }
   return null; // everything left is blocked behind a failure

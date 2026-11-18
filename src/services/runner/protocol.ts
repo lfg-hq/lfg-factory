@@ -66,6 +66,8 @@ export interface ClaudeTaskPayload {
   /** Model and effort for the agent (absent: the agent's own default). */
   model?: string;
   effort?: AgentEffort;
+  /** A ticket build (not a ticket-chat follow-up): its finish advances any build run. Server-side only. */
+  build?: boolean;
 }
 
 /** One chat turn answered by the agent on the person's computer (no repo, no git). */

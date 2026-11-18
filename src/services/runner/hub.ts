@@ -18,6 +18,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
+import { emit } from "../../events/bus.ts";
 import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
 import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
@@ -320,6 +321,7 @@ async function finishJob(jobId: string, deviceId: string,
 
   if (!result.ok) {
     await ticketUpdate(job, { status: "failed", queueStatus: "none" }, `Build on your computer failed: ${result.error ?? "unknown error"}`, "cli_error");
+    buildFinished(job, "failed");
     return;
   }
   const pushed = !!result.commitSha;
@@ -330,6 +332,17 @@ async function finishJob(jobId: string, deviceId: string,
     pushed
       ? `Pushed ${(result.commitSha ?? "").slice(0, 7)} to ${result.branch ?? job.branch}.`
       : `${agentLabel(job)} finished without changing any files.`);
+  buildFinished(job, pushed ? "complete" : "failed");
+}
+
+/** A ticket build on a computer finished: report it like a cloud build, so a build run moves on. */
+function buildFinished(job: typeof runnerJobs.$inferSelect, status: "complete" | "failed") {
+  if (!job.ticketId || job.type === "chat_turn") return;
+  let build = false;
+  try { build = !!(JSON.parse(job.payload) as { build?: boolean }).build; } catch { /* not a build */ }
+  if (!build) return;
+  const durationMs = job.startedAt ? Date.now() - job.startedAt.getTime() : undefined;
+  emit({ type: "ticket.execution_finished", ticketId: job.ticketId, projectId: job.projectId, status, exitCode: status === "complete" ? 0 : 1, durationMs });
 }
 
 // ── Ticket side effects ──────────────────────────────────────────────

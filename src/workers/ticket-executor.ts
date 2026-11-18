@@ -1047,13 +1047,15 @@ const executingTickets = new Set<string>();
 
 // ── Subscriber Setup ──────────────────────────────────────────────────
 
-async function runsOnTheirComputer(userId: string): Promise<boolean> {
-  const { localAiSettings } = await import("../services/runner/opt-in.ts");
-  return (await localAiSettings(userId)).enabled;
+/** Where this person's build of this ticket runs: the ticket's own choice, else their setting. */
+async function buildTargetFor(ticketId: string, actorId: string | undefined) {
+  const { resolveBuildTarget } = await import("../services/runner/build-target.ts");
+  const [row] = await db.select({ details: projectTickets.details }).from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
+  return resolveBuildTarget(actorId, row?.details);
 }
 
 /** Hand a build or a ticket-chat follow-up to the person's own computer. */
-async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string }): Promise<void> {
+async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string; agent?: import("../services/runner/protocol.ts").AgentKind }): Promise<void> {
   const { startTicketOnRunner, RunnerJobError } = await import("../services/runner/ticket-job.ts");
   try {
     await startTicketOnRunner({ projectId, ticketId, actorId, ...opts });
@@ -1145,9 +1147,14 @@ export async function startTicketWorker() {
 
     // "Use my computer for AI": the person who started this build runs it on their own
     // computer (LFG Desktop + their agent), not in a cloud sandbox.
-    if (event.payload.actorId && projectId && await runsOnTheirComputer(event.payload.actorId)) {
-      await sendToTheirComputer(ticketId, projectId, event.payload.actorId, { notes: event.payload.notes, fromQueue: true });
+    const target = projectId ? await buildTargetFor(ticketId, event.payload.actorId) : { where: "cloud" as const };
+    if (target.where === "computer" && event.payload.actorId && projectId) {
+      await sendToTheirComputer(ticketId, projectId, event.payload.actorId, { notes: event.payload.notes, fromQueue: true, agent: target.agent });
       return;
+    }
+    if (target.where === "cloud" && target.reason) {
+      const [owner] = projectId ? await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1) : [];
+      await addLog(ticketId, target.reason, "agent_progress", owner?.ownerId);
     }
 
     // Determine execution mode from user's applicationState
@@ -1278,10 +1285,11 @@ export async function startTicketWorker() {
     const { ticketId, message, sender, actorId, operationId } = event.payload;
     // "Use my computer for AI": the follow-up runs on the sender's computer, continuing
     // the agent's earlier session on this ticket.
-    if (actorId && await runsOnTheirComputer(actorId)) {
+    const chatTarget = actorId ? await buildTargetFor(ticketId, actorId) : null;
+    if (actorId && chatTarget?.where === "computer") {
       const projectId = await resolveProjectIdForTicket(ticketId);
       if (projectId) {
-        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message }));
+        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message, agent: chatTarget.agent }));
         return;
       }
     }

@@ -161,6 +161,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
       ...ticket,
       agentBusy: isChatTurnActive(ticket.id),
       ...ticketCheckSettings(project, ticket.details),
+      ...(await ticketBuildSettings(user.id, ticket.details)),
       anchorBranch: anchor.anchorBranch,
       epicBranch: anchor.epic?.branch ?? null,
       epicKey: anchor.epic?.epicKey ?? null,
@@ -303,6 +304,38 @@ ticketsApi.post("/:projectId/tickets/:ticketId/checks", async (c) => {
   if (body.mode === "project") delete details.checks; else details.checks = body.mode;
   await db.update(projectTickets).set({ details, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId!));
   return c.json({ ok: true, ...ticketCheckSettings(access.project, details) });
+});
+
+/** Where this ticket builds, for the ticket's "Build with" picker. */
+async function ticketBuildSettings(userId: string, details: unknown) {
+  const { ticketBuildWith } = await import("../../services/runner/build-target.ts");
+  const { localAiSettings, installedAgents } = await import("../../services/runner/opt-in.ts");
+  const settings = await localAiSettings(userId);
+  return {
+    buildWith: ticketBuildWith(details),
+    buildDefault: settings.enabled ? settings.agent : "cloud",
+    computerEnabled: settings.enabled,
+    computerAgents: settings.enabled ? (await installedAgents(userId)).map((a) => a.kind) : [],
+  };
+}
+
+// ── POST /:projectId/tickets/:ticketId/build-with — this ticket's own build target ──
+ticketsApi.post("/:projectId/tickets/:ticketId/build-with", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  if (!access.permissions.canManageTickets) return c.json({ error: "Ticket management permission is required." }, 403);
+  const body = await c.req.json().catch(() => ({})) as { buildWith?: unknown };
+  const { isBuildWith } = await import("../../services/runner/build-target.ts");
+  if (body.buildWith !== "default" && !isBuildWith(body.buildWith)) return c.json({ error: "buildWith must be default, cloud, claude, codex or copilot" }, 400);
+  const [ticket] = await db.select({ details: projectTickets.details }).from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, access.project.id))).limit(1);
+  if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  const details = { ...((ticket.details && typeof ticket.details === "object") ? ticket.details as Record<string, unknown> : {}) };
+  if (body.buildWith === "default") delete details.buildWith; else details.buildWith = body.buildWith;
+  await db.update(projectTickets).set({ details, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId!));
+  return c.json({ ok: true, ...(await ticketBuildSettings(user.id, details)) });
 });
 
 // ── POST /:projectId/tickets/:ticketId/skip-checks — keep the saved build, continue ──
