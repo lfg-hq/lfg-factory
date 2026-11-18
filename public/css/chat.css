@@ -743,13 +743,22 @@
     height: 18px;
 }
 
-/* Markdown styling */
-.message-content h1, 
-.message-content h2, 
-.message-content h3 {
-    margin-top: 1em;
-    margin-bottom: 0.5em;
+/* Markdown styling. Headings in a reply stay at the body text size: bold marks them,
+   size does not, so a long answer reads as one calm column. */
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+    font-size: 1em !important;
+    font-weight: 650 !important;
+    line-height: inherit !important;
+    letter-spacing: 0 !important;
+    margin-top: 1.1em;
+    margin-bottom: 0.35em;
 }
+.message-content > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
 
 .message-content p {
     margin-bottom: 0.75em;

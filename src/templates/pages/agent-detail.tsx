@@ -68,8 +68,8 @@ export function AgentDetailPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-calm" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261118-calm-type" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -519,7 +519,7 @@ export function AgentDetailPage({
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
   <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261022-attachments"></script>
+  <script src="/public/js/chat.js?v=20261118-trail"></script>
   <script src="/public/js/agents.js"></script>
 
   <script>

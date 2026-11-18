@@ -1412,28 +1412,26 @@ html[data-theme] #sidebar.sidebar .conversations-section .conversation-item:hove
     background: var(--sb-hover) !important;
     color: var(--sb-text) !important;
 }
-html[data-theme] #sidebar:not(.minimized) .nav-link.active,
-html[data-theme] #sidebar:not(.minimized) .sidebar-nav .nav-link.active,
-html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger.active,
-html[data-theme] #sidebar:not(.minimized) #build-inbox-button[aria-expanded="true"],
+/* Where you are keeps the brand tint, in the open sidebar and the rail alike. */
+html[data-theme] #sidebar .nav-link.active,
+html[data-theme] #sidebar .sidebar-nav .nav-link.active,
+html[data-theme] #sidebar .project-dropdown-trigger.active,
+html[data-theme] #sidebar #build-inbox-button[aria-expanded="true"],
 html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active {
-    background: var(--sb-active) !important;
-    color: var(--sb-text) !important;
+    background: var(--tint-bg, rgba(124, 58, 237, 0.1)) !important;
+    color: var(--tint-text, #6d28d9) !important;
     box-shadow: none !important;
 }
-html[data-theme] #sidebar:not(.minimized) .nav-link.active .nav-text,
-html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active .conversation-title { color: var(--sb-text) !important; }
+html[data-theme] #sidebar .nav-link.active .nav-text,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active .conversation-title { color: var(--tint-text, #6d28d9) !important; font-weight: 500 !important; }
+html[data-theme] #sidebar .nav-link.active i,
+html[data-theme] #sidebar:not(.minimized) .nav-link.active i,
+html[data-theme] #sidebar #build-inbox-button[aria-expanded="true"] i { color: var(--primary-color, #7c3aed) !important; }
 
-/* Notification count: a quiet grey number, not a purple pill. */
+/* Notification count: the small tinted pill, as in the rail. */
 html[data-theme] #sidebar:not(.minimized) #build-inbox-button .build-unread {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    color: var(--sb-muted) !important;
-    font-size: 12px !important;
-    font-weight: 400 !important;
-    padding: 0 !important;
-    min-width: 0 !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
 }
 
 /* Section labels and the chat list. */
@@ -1469,3 +1467,46 @@ html[data-theme] #sidebar:not(.minimized) .user-avatar {
 }
 html[data-theme] #sidebar:not(.minimized) .avatar-text { color: var(--sb-text) !important; font-size: 12px !important; }
 html[data-theme] #sidebar:not(.minimized) .username { font-size: 13.5px !important; }
+
+/* ── Rail = open sidebar, minus the labels ────────────────────────────────────
+   Collapsing used to re-centre every icon in taller 40px rows at 18px, so the icons
+   jumped down and grew. The rail now keeps the open sidebar's padding, row height and
+   14px icons; only the labels go, so each icon stays exactly where it was. */
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-header {
+    justify-content: flex-start !important;
+    padding: 12px 10px 6px 16px !important;
+}
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .logo-section { width: auto !important; height: auto !important; justify-content: flex-start !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .logo-icon { font-size: 1.15rem !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .project-selector-section { padding: 2px 8px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .project-dropdown-trigger { padding: 6px 10px !important; justify-content: flex-start !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .new-chat-section { padding: 2px 8px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .new-chat-link { padding: 6px 10px !important; justify-content: flex-start !important; gap: 10px !important; border-radius: 7px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-nav:not(.bottom-nav) { padding: 0 8px 6px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-nav:not(.bottom-nav) .nav-link {
+    padding: 6px 10px !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    margin-bottom: 1px !important;
+    border-radius: 7px !important;
+    font-size: 13.5px !important;
+    line-height: 20px !important;
+    min-height: 0 !important;
+}
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) :is(.project-dropdown-trigger, .new-chat-link, .sidebar-nav .nav-link) > i:first-child {
+    font-size: 14px !important;
+    width: 20px !important;
+    height: 20px !important;
+    line-height: 20px !important;
+    margin: 0 !important;
+    text-align: center !important;
+}
+html[data-theme] :is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) :is(.project-dropdown-trigger, .new-chat-link, .nav-link):not(.active) > i:first-child { color: var(--sb-icon) !important; }
+
+/* Pins are tilted, like a pushpin: the keep-open pin in the header and every chat pin. */
+#minimize-btn .peek-pin { transform: rotate(45deg); }
+#sidebar .conversation-item .conversation-pin i { transform: rotate(45deg) !important; display: inline-block; }
+#sidebar .conversation-item.is-pinned .conversation-pin { transform: none !important; }
+/* Same row height open and collapsed, so nothing below it shifts. */
+#sidebar .project-dropdown-trigger { height: 32px !important; box-sizing: border-box !important; }
+#sidebar .project-dropdown-trigger > i:first-child { width: 20px !important; text-align: center !important; font-size: 14px !important; margin: 0 !important; }

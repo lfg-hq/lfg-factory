@@ -72,7 +72,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
   <title>Projects — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-calm" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />

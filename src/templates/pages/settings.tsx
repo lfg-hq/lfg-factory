@@ -76,7 +76,7 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
   <title>Settings — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-calm" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />

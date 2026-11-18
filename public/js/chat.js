@@ -3807,7 +3807,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let trailTimer = null;
 
     function finishWorkPhase() {
-        finalizeTrail(activeTrail?.dataset.warning === 'true' ? 'Worked with warnings' : 'Worked');
+        finalizeTrail(activeTrail?.dataset.warning === 'true' ? 'Worked · last step failed' : 'Worked');
     }
 
     function beginResponseBlock() {
@@ -3868,6 +3868,10 @@ document.addEventListener('DOMContentLoaded', () => {
             activeTrail.dataset.warning = 'true';
             // A subsequent retry must not overwrite the failure in the trail.
             if (!step.key) step.key = 'warning-' + Date.now();
+        } else if (activeTrail.dataset.warning === 'true') {
+            // The agent carried on after the failed step (usually a retry that worked):
+            // the row stays in the trail, but the turn did not end on a problem.
+            activeTrail.dataset.warning = 'recovered';
         }
         const steps = activeTrail.querySelector('.agent-trail-steps');
         const text = step.detail || step.label || 'Thinking…';
@@ -4058,7 +4062,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateTrailMeta(trail);
         trail.classList.remove('is-running');
         trail.classList.add('is-done', 'is-collapsed');
-        const terminal = outcome || (trail.dataset.warning === 'true' ? 'Completed with warnings' : 'Completed');
+        const terminal = outcome || (trail.dataset.warning === 'true' ? 'Completed · last step failed' : 'Completed');
         trail.dataset.outcome = terminal === 'Completed' || terminal === 'Worked' ? 'success'
             : terminal === 'Failed' ? 'failed'
             : terminal === 'Stopped' ? 'stopped' : 'warning';
