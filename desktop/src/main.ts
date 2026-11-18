@@ -12,6 +12,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { Runner, defaultWorkRoot, type RunnerState } from "./runner.ts";
 import { nodeSocketFactory } from "./socket.ts";
 import { signInWithBrowser, SignInCancelled } from "./browser-signin.ts";
-import type { BuildJobOffer } from "./runner.ts";
+import type { BuildJobOffer, PreviewJobOffer } from "./runner.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +32,8 @@ interface Config {
   email?: string;
   /** Projects whose jobs run without asking. */
   trustedProjects?: string[];
+  /** Previews that run without asking: project + a hash of the exact commands approved. */
+  trustedPreviews?: string[];
   workRoot?: string;
 }
 
@@ -236,6 +239,35 @@ async function approve(job: BuildJobOffer) {
   return { approved: true as const };
 }
 
+/**
+ * A preview runs the app's own commands (install, build, start) from the project's saved
+ * plan. Ask before the first run, and again whenever those commands change.
+ */
+async function approvePreview(job: PreviewJobOffer, commands: string[]) {
+  const p = job.payload;
+  const key = `${p.projectId}:${createHash("sha256").update(JSON.stringify([p.repoUrl, commands])).digest("hex").slice(0, 16)}`;
+  if (config.trustedPreviews?.includes(key)) return { approved: true as const };
+  const listed = commands.length
+    ? `It will run:\n${commands.map(c => `  ${c}`).join("\n").slice(0, 1200)}`
+    : "LFG has no saved plan for this app yet, so LFG Desktop will work out how to run it from the repository (package.json, manage.py or Gemfile).";
+  const { response, checkboxChecked } = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Run on this computer", "Decline"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `Run ${p.projectName} on this computer?`,
+    detail: `${p.label}\nRepository: ${p.repoUrl}\nFolder: ${join(config.workRoot ?? defaultWorkRoot(), "previews")}\n\n${listed}\n\n` +
+      "The app only listens on this computer (localhost). Stop it any time from the Preview tab.",
+    checkboxLabel: "Don't ask again for these commands",
+  });
+  if (response !== 0) return { approved: false as const, reason: "Declined on this computer" };
+  if (checkboxChecked) {
+    config.trustedPreviews = [...new Set([...(config.trustedPreviews ?? []), key])].slice(-200);
+    saveConfig();
+  }
+  return { approved: true as const };
+}
+
 function startRunner() {
   runner?.stop();
   runner = null;
@@ -251,13 +283,14 @@ function startRunner() {
     env: shellEnv,
     appVersion: app.getVersion(),
     approve,
+    approvePreview,
     onState: (state, detail) => {
       runnerStatus = { state, detail };
       refreshTray();
       if (state === "unauthorized") showSignIn("This computer was disconnected from LFG. Sign in again to reconnect it.");
     },
     onJob: (e) => {
-      const body = e.phase === "started" ? "Started on this computer"
+      const body = e.phase === "started" ? (e.detail ?? "Started on this computer")
         : e.phase === "finished" ? (e.detail ?? "Done")
         : e.phase === "failed" ? `Failed: ${e.detail ?? ""}`.slice(0, 200)
         : e.phase === "cancelled" ? "Cancelled" : `Declined${e.detail ? `: ${e.detail}` : ""}`;
@@ -290,7 +323,7 @@ function refreshTray() {
   if (process.platform === "darwin") tray.setTitle(busy ? `LFG ●${busy}` : runnerStatus.state === "connected" ? "LFG" : "LFG ○");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: statusLabel(), enabled: false },
-    ...(busy ? [{ label: `${busy} job running`, enabled: false }] : []),
+    ...(busy ? [{ label: `${busy} running (builds and previews)`, enabled: false }] : []),
     { type: "separator" },
     { label: "Open LFG", click: () => showWorkspace() },
     ...(signedIn ? [{ label: "Open LFG in your browser", click: () => { void shell.openExternal(`${origin()}/projects`); } }] : []),
@@ -311,7 +344,7 @@ if (!app.requestSingleInstanceLock()) {
     shellEnv = loginShellEnv();
     config = loadConfig();
     // Signed in to a different server before (e.g. a local test one): start over.
-    if (config.serverUrl && config.serverUrl !== SERVER_URL) config = { trustedProjects: config.trustedProjects };
+    if (config.serverUrl && config.serverUrl !== SERVER_URL) config = { trustedProjects: config.trustedProjects, trustedPreviews: config.trustedPreviews };
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
     tagServerRequests();
     allowMicrophoneForServer();

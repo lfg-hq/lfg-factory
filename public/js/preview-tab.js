@@ -32,6 +32,12 @@
   let branches = [{ id: "default", label: "Default branch", ticketId: null }]; // previewable branches
   let branchId = "default"; // which branch is currently being previewed
   let preferTicket = null; // when opened from a ticket drawer: default the selector to this ticket's branch
+  // "Use my computer for AI" on → the server runs previews on the person's computer (LFG
+  // Desktop). forceCloud asks for the cloud sandbox instead; remembered per project.
+  let forceCloud = false;
+  const isDesktopApp = /Electron\//.test(navigator.userAgent);
+  const onComputer = () => !!(current && current.where === "computer");
+  const whereKey = () => "lfg-preview-where:" + projectId;
 
   // ── In-app browser (tabbed) ──
   let bTabs = [];        // [{ id, url, history:[urls], hi }]
@@ -50,7 +56,8 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   function api(path, opts) {
-    return fetch(`/api/projects/${projectId}/preview${path}`, {
+    const where = forceCloud ? (path.indexOf("?") >= 0 ? "&" : "?") + "where=cloud" : "";
+    return fetch(`/api/projects/${projectId}/preview${path}${where}`, {
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       ...opts,
@@ -220,7 +227,8 @@
       (chatBtn ? chatBtn : "") +
       branchSel +
       tbDiv() +
-      btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
+      // Screenshots are taken from the cloud sandbox; a computer preview has none.
+      (onComputer() ? "" : btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" })) +
       btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
       tbDiv() +
       btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "More — Env Profile, Restart, Stop" })
@@ -248,6 +256,7 @@
   // same question, so they share one control: Setup and Steps are setup-time views,
   // then the app's own log, each companion app, and each database.
   function segList() {
+    if (onComputer()) return [{ key: "logs", label: "Setup", ptab: "logs" }, { key: "steps", label: "Steps", ptab: "steps" }];
     const out = [
       { key: "logs", label: "Setup", ptab: "logs" },
       { key: "steps", label: "Steps", ptab: "steps" },
@@ -479,9 +488,17 @@
             <button data-dev="tablet" title="Tablet view (834px)" style="${navBtn()}"><i class="fas fa-tablet-screen-button"></i></button>
             <button data-dev="mobile" title="Mobile view (390px)" style="${navBtn()}"><i class="fas fa-mobile-screen-button"></i></button>
           </div>
-          <button id="pv-proxy" data-bx="proxy" title="Keep links inside this browser (in-app links). May break real-time features like SignalR/WebSockets." style="${navBtn()}"><i class="fas fa-link"></i></button>
+          ${onComputer() ? "" : `<button id="pv-proxy" data-bx="proxy" title="Keep links inside this browser (in-app links). May break real-time features like SignalR/WebSockets." style="${navBtn()}"><i class="fas fa-link"></i></button>`}
           <button data-bx="external" title="Open in a real browser tab" style="${navBtn()}"><i class="fas fa-external-link-alt"></i></button>
         </div>
+        ${onComputer() ? `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;font-size:12px;color:var(--text-secondary,#9ca3af);border-bottom:1px solid var(--border-color,#2a2a2a);">
+          <i class="fas fa-laptop" style="color:#7c3aed;"></i>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${isDesktopApp
+            ? "Running on your computer at " + esc(previewUrl)
+            : "Running on your computer at " + esc(previewUrl) + ". Only that computer can open it; if it stays blank here, open it in a new tab."}</span>
+          <button data-bx="external" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12px;flex:none;">Open in new tab</button>
+          <button data-action="usecloud" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;font-size:12px;flex:none;">Run in the cloud instead</button>
+        </div>` : ""}
         <div id="pv-frames" style="flex:1;position:relative;background:#fff;"></div>
       </div>`;
     renderTabs(); renderFrames(); syncAddr();
@@ -508,7 +525,8 @@
   // The actual iframe src: raw app URL, or routed through our same-origin proxy
   // so links (incl. target=_blank) stay in-app. Address bar always shows the real URL.
   function frameSrc(u) {
-    if (!proxyMode) return u;
+    // The proxy runs on LFG's server, which can't reach this computer's localhost.
+    if (!proxyMode || onComputer()) return u;
     try { const x = new URL(u); return `/preview-proxy/${projectId}` + x.pathname + x.search; } catch (_) { return u; }
   }
   function updateProxyBtn() {
@@ -616,7 +634,7 @@
   }
 
   // Checkpoint runbook — the ordered command list with per-step status.
-  const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;margin:0;border-width:2px;"></span>', failed: '<span style="color:#ef4444;">✗</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
+  const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;margin:0;border-width:2px;"></span>', failed: '<span style="color:#ef4444;">✗</span>', skipped: '<span style="color:var(--text-secondary,#9ca3af);">–</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
   function stepsPanel(flex) {
     if (!stepsData || !stepsData.length) return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px;">No setup steps yet — the plan is being built.</div>`;
     const rows = stepsData.map((s) => {
@@ -648,11 +666,29 @@
   }
 
   function render(state) {
+    // Placeholder states (a click's "starting…") keep knowing where the preview runs.
+    if (state && state.where === undefined && current && current.where) state = { ...state, where: current.where, deviceName: current.deviceName, computerAvailable: current.computerAvailable };
     current = state;
     const body = $("preview-body");
     if (!body) return;
     const la = $("preview-left-actions"); if (la) la.innerHTML = ""; // only the running view fills it
     const status = state.previewStatus || "idle";
+
+    // Computer preview queued with no LFG Desktop to run it (or one too old to run previews).
+    if (state.where === "computer" && state.waiting) {
+      currentView = "progress";
+      setSub("Waiting for your computer");
+      renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      body.innerHTML = `
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
+          <div style="font-size:30px;color:#7c3aed;"><i class="fas fa-laptop"></i></div>
+          <div style="font-size:15px;color:var(--text-color,#e2e8f0);font-weight:600;">Waiting for your computer</div>
+          <div style="font-size:13px;max-width:440px;line-height:1.5;">${esc(state.waitingMessage || "Open LFG Desktop and the preview starts there.")}</div>
+          <div style="font-size:12px;">${esc(state.label || "")}</div>
+          ${btn("Run in the cloud instead", { action: "usecloud", icon: "fa-cloud" })}
+        </div>`;
+      return;
+    }
 
     if (IN_PROGRESS.includes(status)) {
       currentView = "progress";
@@ -676,6 +712,7 @@
       });
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:10px;padding:16px 20px;">
+          ${whereLine(state)}
           <div style="display:flex;align-items:center;gap:12px;">
             <div id="preview-progress-head" style="display:flex;align-items:center;gap:10px;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;min-width:0;">
               <div class="spinner" style="width:18px;height:18px;flex:none;margin:0;border-width:2.5px;"></div>
@@ -691,7 +728,7 @@
 
     if (status === "running" && state.previewUrl) {
       currentView = "running";
-      setSub("Live" + (state.branch ? ` · ${state.branch}` : "") + ((state.databaseIdentities || []).length ? " · DB: " + state.databaseIdentities.map(d => d.database).join(", ") : ""));
+      setSub("Live" + (state.where === "computer" ? " on your computer" : "") + (state.branch ? ` · ${state.branch}` : "") + ((state.databaseIdentities || []).length ? " · DB: " + state.databaseIdentities.map(d => d.database).join(", ") : ""));
       syncBranchFromState(state); // reflect the actually-running branch
       renderRunningActions();
       // Multi-app: show the selected app's URL (falls back to the primary appUrl).
@@ -715,15 +752,16 @@
         : "")
         + btn("Update & rebuild", { action: "refreshbranch", primary: true, icon: "fa-rotate" })
         + btn("Run default branch", { action: "rundefault", icon: "fa-house" })
-        + btn("Re-setup", { action: "setup", icon: "fa-rotate" });
+        + (state.where === "computer" ? "" : btn("Re-setup", { action: "setup", icon: "fa-rotate" }));
       renderActions(eActions());
       // Load branches so the selector can offer "Default branch" / other tickets.
       loadBranches().then(() => { if (currentView === "error") renderActions(eActions()); });
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:12px;padding:16px 20px;">
+          ${whereLine(state)}
           <div style="display:flex;align-items:center;gap:10px;color:var(--text-color,#e2e8f0);font-size:14px;">
             <i class="fas fa-triangle-exclamation" style="color:#ef4444;font-size:18px;"></i>
-            <span>The preview couldn't start${state.error ? " — " + esc(state.error.split("\n")[0].slice(0, 120)) : ""}</span>
+            <span>The preview couldn't start${state.error ? " — " + esc(state.error.split("\n")[0].slice(0, state.where === "computer" ? 400 : 120)) : ""}</span>
           </div>
           <div style="display:flex;align-items:center;gap:12px;">
             <div style="flex:1;font-size:12px;color:var(--text-secondary,#9ca3af);">The failing step and its output are below.</div>
@@ -742,6 +780,13 @@
     // start right here, instead of forcing default-first-then-switch.
     const setupDone = !!(state && state.setupComplete);
     const canPick = setupDone && branches.length > 1;
+    const local = state.where === "computer";
+    const intro = local
+      ? "Runs the app on your computer with LFG Desktop: checks out the branch, starts the databases it needs, installs, and starts it. Nothing runs in the cloud."
+      : "Spins up a sandbox, detects the stack, provisions the databases it needs, seeds data, and starts the app — then shows it right here. First run takes a couple of minutes.";
+    const switchLink = local
+      ? `<button data-action="usecloud" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12.5px;">Run in the cloud instead</button>`
+      : (state.computerAvailable ? `<button data-action="usecomputer" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12.5px;">Run on my computer instead</button>` : "");
     setSub(stopped ? "Stopped" : "Not running");
     renderActions("");
     const opts = branchOptions();
@@ -752,13 +797,11 @@
     body.innerHTML = `
       <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
         <div style="font-size:30px;color:#7c3aed;"><i class="fas fa-play-circle"></i></div>
-        <div style="font-size:15px;color:var(--text-color,#e2e8f0);font-weight:600;">${stopped ? "Preview stopped" : "Run this project live"}</div>
-        <div style="font-size:13px;max-width:420px;line-height:1.5;">
-          Spins up a sandbox, detects the stack, provisions the databases it needs, seeds data,
-          and starts the app — then shows it right here. First run takes a couple of minutes.
-        </div>
+        <div style="font-size:15px;color:var(--text-color,#e2e8f0);font-weight:600;">${stopped ? "Preview stopped" : local ? "Run this project on your computer" : "Run this project live"}</div>
+        <div style="font-size:13px;max-width:420px;line-height:1.5;">${intro}</div>
         ${branchSel}
         ${btn(canPick ? "Start preview" : (stopped ? "Start preview" : "Set up preview"), { action: setupDone ? "startbranch" : "setup", primary: true, icon: "fa-play" })}
+        ${switchLink}
       </div>`;
     // Populate the branch list (ticket worktrees) so the selector has real options.
     if (setupDone && branches.length <= 1) loadBranches().then(() => { if (currentView === "idle" && current) render(current); });
@@ -829,7 +872,10 @@
     m.id = "preview-more-menu";
     m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
     const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
-    m.innerHTML = item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Clean build", "cleanbuild", "fa-hammer") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
+    m.innerHTML = onComputer()
+      ? item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Run in the cloud instead", "usecloud", "fa-cloud") + item("Stop", "stop", "fa-stop", true)
+      : item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Clean build", "cleanbuild", "fa-hammer") + item("Rebuild sandbox", "rebuildvm", "fa-server")
+        + (current && current.computerAvailable ? item("Run on my computer", "usecomputer", "fa-laptop") : "") + item("Stop", "stop", "fa-stop", true);
     document.body.appendChild(m);
     const r = anchor.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -839,7 +885,7 @@
     m.addEventListener("click", (e) => {
       const it = e.target.closest("[data-menu]"); if (!it) return;
       const a = it.getAttribute("data-menu"); m.remove();
-      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "refreshbranch") doRestart(true); else if (a === "cleanbuild") doRestart(true, true); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
+      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "refreshbranch") doRestart(true); else if (a === "cleanbuild") doRestart(true, true); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop(); else if (a === "usecloud") setWhere(true); else if (a === "usecomputer") setWhere(false);
     });
     setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
   }
@@ -1050,6 +1096,25 @@
     } catch (e) { if (msg) { msg.textContent = "Re-probe failed: " + e.message; msg.style.color = "#ef4444"; } }
   }
 
+  // Switch between the cloud sandbox and this person's computer, and remember it for the project.
+  function setWhere(cloud) {
+    forceCloud = !!cloud;
+    try { if (forceCloud) localStorage.setItem(whereKey(), "cloud"); else localStorage.removeItem(whereKey()); } catch (_) {}
+    stateVersion++;
+    logText = ""; stepsData = null; bTabs = []; bBase = null; bActive = null; currentView = null;
+    load();
+  }
+
+  // A line saying where the preview runs, shown above each view.
+  function whereLine(state) {
+    if (!state || state.where !== "computer") return "";
+    const dev = state.deviceName ? ` (${esc(state.deviceName)})` : "";
+    return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary,#9ca3af);">
+      <i class="fas fa-laptop" style="color:#7c3aed;"></i><span>Running on your computer${dev} with LFG Desktop</span>
+      <button data-action="usecloud" style="margin-left:auto;background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12px;padding:0;">Run in the cloud instead</button>
+    </div>`;
+  }
+
   async function doStop() {
     stateVersion++;
     setSub("Stopping…");
@@ -1075,7 +1140,11 @@
     managePolling("starting");
     try {
       const response = await api("/restart", { method: "POST", body: JSON.stringify({ refresh, cleanBuild, ticketId, branch, conversationId: window.currentConversationId || null }) });
-      if (!response.ok) { const result = await response.json(); throw new Error(result.error || "Could not restart the app"); }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not restart the app");
+      // The ticket is set to build in the cloud, so its preview went there: follow it.
+      if (result.where === "cloud" && onComputer()) { forceCloud = true; if (result.notice) toast(result.notice); }
+      if (result.where === "computer") load();
     }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
   }
@@ -1200,6 +1269,8 @@
     else if (action === "refreshbranch") doRestart(true);
     else if (action === "rundefault") doRunBranch("default");
     else if (action === "stop") doStop();
+    else if (action === "usecloud") setWhere(true);
+    else if (action === "usecomputer") setWhere(false);
     else if (action === "togglelog") toggleLog();
     else if (action === "shellrun") runShell();
     else if (action === "refreshapplog") loadAppLog();
@@ -1402,7 +1473,9 @@
 
   // The chat WS delivers preview events for EVERY project the user has open, so
   // drop anything that isn't for THIS project (else two open projects cross-talk).
-  const forOther = (data) => data && data.projectId && projectId && data.projectId !== projectId;
+  const forOther = (data) => (data && data.projectId && projectId && data.projectId !== projectId)
+    // A cloud event while showing the computer's preview, or the other way round.
+    || (!!data && !!current && current.where !== undefined && (data.where === "computer") !== onComputer());
 
   window.PreviewTab = {
     onStatus(data) {
@@ -1498,6 +1571,7 @@
     const root = $("preview-root");
     if (!root) return;
     projectId = root.getAttribute("data-project-id");
+    try { forceCloud = localStorage.getItem(whereKey()) === "cloud"; } catch (_) {}
     $("preview-actions")?.addEventListener("click", onActionClick);
     $("preview-left-actions")?.addEventListener("click", onActionClick);
     $("preview-body")?.addEventListener("click", onActionClick);

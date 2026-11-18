@@ -77,6 +77,9 @@ defensively — check both with real installs.
 - **Jobs, not commands.** The server sends a `claude_task` (repo, branch, prompt). It
   never sends shell commands. The runner validates branch names and repository URLs,
   and limits Claude Code's tools to its own allow-list (a job can only narrow it).
+  The one exception is a `preview` job: it carries the project's saved preview plan
+  (install / build / run commands), so LFG Desktop shows those exact commands and asks
+  before running them, and asks again whenever they change (see below).
 - **The person approves.** LFG Desktop asks before each job, unless they ticked
   "always run jobs for this project". The headless CLI declines everything unless
   started with `--auto-approve`.
@@ -105,6 +108,52 @@ defensively — check both with real installs.
 | Settings UI | Settings → Integrations → Computers: the opt-in switch, computers, headless tokens (`public/js/runner-computers.js`, `src/services/runner/opt-in.ts`) |
 | Ticket UI | "Build on my computer" in the Tickets drawer Run menu, only when turned on (`tickets-list.tsx`) |
 | Desktop app | `desktop/` (Electron shell, runner core, headless CLI) |
+
+## Previews on your computer
+
+With "Use my computer for AI" on, the Preview tab runs the app on the person's computer
+instead of starting a cloud (Mags) sandbox. It falls back to the cloud only when the
+setting is off, the ticket's "Build with" is `cloud`, or the person picks "Run in the
+cloud instead" (remembered per project in that browser).
+
+- **Server:** `src/services/runner/preview-job.ts`. A `preview` runner job (protocol 3)
+  carries the repo, the branch (a ticket's, an epic's, or the default), the saved plan
+  from `project_environment.setup_manifest` (install, build, run, ports, the switched-on
+  companion apps, databases, migrations, seed) and the project's env vars. The preview's
+  state (status, steps, log, `http://localhost` addresses) is kept on that person's job
+  row, not on the project's shared preview row, because it only exists on their computer.
+  Starting another preview of the same project (branch switch, Update & rebuild, Restart)
+  cancels the previous job first. `GET/POST /api/projects/:id/preview*` route to it.
+- **Computer:** `desktop/src/preview.ts`. Each project has one folder,
+  `~/LFG/previews/<project>`: a git worktree of the same clone builds use
+  (`~/LFG/repos/<hash>`), checked out detached. It is separate from the build worktrees
+  (`~/LFG/worktrees/<branch>`) because a build recreates its worktree from scratch and
+  would pull files out from under a running app; detached, it never holds a branch a
+  build needs. A plain restart reuses what's installed; Update & rebuild fetches and
+  installs again. Apps are told `HOST=127.0.0.1` and `0.0.0.0` in commands becomes
+  `127.0.0.1`, so they aren't reachable from the local network.
+- **Approval:** the first run of a plan shows its commands and asks; "Don't ask again for
+  these commands" remembers project + a hash of the commands, so a changed plan asks
+  again. A project without a saved plan is worked out from the repository (package.json,
+  manage.py, Gemfile); with none of those, it says to run it once in the cloud.
+- **Databases:** a connection variable already set in the project's Env tab is used
+  as-is. Otherwise LFG Desktop uses Postgres / MySQL / Redis / SQL Server already
+  running on its usual port, else starts one in Docker (`lfg-preview-<engine>`, with a
+  named volume), else stops with a plain message naming what to install. Seed data runs
+  once per database; migrations run every time.
+- **Waiting / old app:** with no LFG Desktop connected the Preview tab shows "Waiting for
+  your computer". A computer on protocol 2 (an older LFG Desktop) is never offered a
+  preview; the tab says to update LFG Desktop or run it in the cloud.
+- **Showing it:** the Preview tab frames `http://localhost:<port>` directly. In LFG
+  Desktop that always works. In a normal browser on lfg.run it works in Chrome, Edge and
+  Firefox, which treat `http://localhost` as a secure origin an https page may frame
+  (Chrome may first ask to allow local network access); Safari blocks it as mixed
+  content. Either way the address only works on the computer running the app, so the tab
+  always shows "Open in new tab" next to it. The same-origin preview proxy is off for
+  computer previews: it runs on LFG's server, which can't reach anyone's localhost.
+- **Not covered yet:** background workers from the plan, raw `sqlScripts`, the App /
+  Shell / database log panes (the app's output streams into the Setup log instead),
+  screenshots, and the chat's `@preview` tools, which still act on the cloud sandbox.
 
 ## Staying connected
 
@@ -148,6 +197,8 @@ bun test tests/runner-hub.test.ts   # routing, ownership, reconnects, cancel, de
 bun test tests/runner-e2e.test.ts   # real WebSocket + runner + git, stand-in `claude`
 bun test tests/desktop-auth.test.ts # browser sign-in: PKCE, one-time codes, app session
 bun test tests/desktop-opt-in.test.ts # setting, agent choice; Build and ticket chat go to the computer
+bun test tests/runner-preview.test.ts # previews: where they run, waiting, old app, reports, restart/stop
+bun test tests/desktop-preview.test.ts # LFG Desktop running a real repo's app: branches, ports, databases, cancel
 bun test tests/desktop-agents.test.ts # Claude / Codex / Copilot output → one event shape
 bun test tests/mcp-endpoint.test.ts   # LFG's tools over MCP: tokens, schemas, writes
 bun test tests/local-chat-e2e.test.ts # a chat turn on the computer, through the real chat handler

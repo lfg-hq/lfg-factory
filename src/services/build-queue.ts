@@ -258,12 +258,16 @@ async function finishRun(runId: string): Promise<void> {
   previewBranch = branch;
 
   try {
-    const { restartPreview } = await import("./dev-preview.ts");
-    const res = await restartPreview(run.projectId, {
-      userId: run.userId,
-      branch,
-      conversationId: run.conversationId || null,
-    });
+    // "Use my computer for AI" on: the preview runs on the person's computer, not a cloud sandbox.
+    const local = await import("./runner/preview-job.ts");
+    const res = (await local.resolvePreviewWhere(run.userId)).where === "computer"
+      ? await local.startLocalPreview({ projectId: run.projectId, userId: run.userId, refresh: true, ...(await local.resolvePreviewBranch(run.projectId, { branch })) })
+          .then(job => local.waitForLocalPreview(job.id, 15 * 60_000))
+      : await (await import("./dev-preview.ts")).restartPreview(run.projectId, {
+          userId: run.userId,
+          branch,
+          conversationId: run.conversationId || null,
+        });
     if ("error" in res) {
       await logRunEvent(runId, null, "preview_failed", { branch, error: res.error }, true);
       await announce(runId, `⚠️ The build finished, but the preview didn't start: ${res.error}\n\nYou can retry it from the **Preview** tab.`);

@@ -19,17 +19,37 @@ import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
 import { getEnvironmentApplyStatus, getPreviewState, setupPreview, restartPreview, restartPreviewApp, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService, rebuildPreviewSandbox } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
+import { LocalPreviewError, localPreviewState, resolvePreviewBranch, resolvePreviewWhere, startLocalPreview, stopLocalPreview } from "../../services/runner/preview-job.ts";
+import { localAiSettings } from "../../services/runner/opt-in.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
 const previewApi = new Hono<Env>();
 previewApi.use("*", requireAuth as any);
 
+/**
+ * With "Use my computer for AI" on, previews run on the person's computer (LFG Desktop)
+ * rather than in a cloud sandbox. `?where=cloud` (or `where: "cloud"` in the body) runs
+ * this one in the cloud anyway.
+ */
+const requestedWhere = (c: any, body?: { where?: unknown }) => body?.where ?? c.req.query("where");
+
 previewApi.get("/:projectId/preview", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  return c.json(await getPreviewState(access.project.id));
+  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c) });
+  if (where.where === "computer") return c.json(await localPreviewState(user.id, access.project.id));
+  return c.json({ ...(await getPreviewState(access.project.id)), where: "cloud", computerAvailable: (await localAiSettings(user.id)).enabled });
 });
+
+/** Start a preview on the person's computer; a plain-language error if it can't. */
+async function startOnComputer(c: any, run: () => Promise<unknown>) {
+  try { await run(); return c.json({ ok: true, status: "detecting", where: "computer" }, 202); }
+  catch (e) {
+    if (e instanceof LocalPreviewError) return c.json({ error: e.message, where: "computer" }, e.status);
+    throw e;
+  }
+}
 
 previewApi.post("/:projectId/preview/setup", async (c) => {
   const user = c.get("user");
@@ -38,6 +58,13 @@ previewApi.post("/:projectId/preview/setup", async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const internalId = access.project.id;
+
+  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body) })).where === "computer") {
+    return startOnComputer(c, async () => startLocalPreview({
+      projectId: internalId, userId: user.id, refresh: true,
+      ...(typeof body.branch === "string" ? await resolvePreviewBranch(internalId, { branch: body.branch }) : {}),
+    }));
+  }
 
   // Fire-and-forget — status streams over WS + persists on project_environments.
   setupPreview(internalId, {
@@ -60,13 +87,19 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   // ticket. Ignored when a ticketId is present; that resolves its own branch.
   const branch = typeof body.branch === "string" && body.branch ? body.branch : undefined;
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
+  const where = await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body), ticketId });
+  if (where.where === "computer") {
+    return startOnComputer(c, async () => startLocalPreview(body.refresh === true
+      ? { projectId: access.project.id, userId: user.id, refresh: true, ...(await resolvePreviewBranch(access.project.id, { ticketId, branch })) }
+      : { projectId: access.project.id, userId: user.id, refresh: false }));
+  }
   // A plain restart preserves the active checkout. Branch selection/update explicitly
   // opts into the full preparation pipeline, including fetch/install/build/schema.
   const run = body.refresh === true
     ? restartPreview(access.project.id, { userId: user.id, ticketId, branch, conversationId, cleanBuild: body.cleanBuild === true })
     : restartPreviewApp(access.project.id, { userId: user.id, rebuildApp: body.rebuildApp === true });
   run.catch((e) => console.error("[preview] restart failed:", e));
-  return c.json({ ok: true, status: "starting" }, 202);
+  return c.json({ ok: true, status: "starting", where: "cloud", ...(where.reason ? { notice: where.reason } : {}) }, 202);
 });
 
 // HARD sandbox rebuild — force-kill a stuck/orphaned VM and respawn a clean one, then restart.
@@ -612,6 +645,11 @@ previewApi.post("/:projectId/preview/stop", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  if ((await resolvePreviewWhere(user.id, { requested: requestedWhere(c, body) })).where === "computer") {
+    await stopLocalPreview(user.id, access.project.id);
+    return c.json({ ok: true, where: "computer" });
+  }
   await stopPreview(access.project.id, user.id);
   return c.json({ ok: true });
 });
