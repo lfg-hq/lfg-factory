@@ -69,7 +69,7 @@ export function AgentDetailPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261118-calm-type" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261118-composer-fit" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />

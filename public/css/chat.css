@@ -3445,3 +3445,28 @@ input:checked + .turbo-slider + .turbo-label,
 [data-theme="light"] .local-usage-meta,
 [data-theme="light"] .local-usage-turn { color: #6b7280; }
 [data-theme="light"] .local-usage-bar { background: #e5e7eb; }
+
+/* The left controls (attach, connectors, settings, role · model · effort, plan usage) and
+   the right ones (mic, send) are positioned separately, so in a narrow chat column the
+   left row ran under the mic. The left row now stops short of the right one; the status
+   label shortens with an ellipsis first, and the usage ring keeps its place. */
+#chat-form .left-actions {
+    right: 92px;
+    min-width: 0;
+    pointer-events: none;   /* the empty stretch before the mic still reaches the textarea */
+}
+#chat-form .left-actions > * { flex-shrink: 0; pointer-events: auto; }
+#chat-form .left-actions > .status-indicators {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+#chat-form .status-indicators .status-item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 0 1 auto;
+}
+#chat-form .status-indicators .status-divider { flex-shrink: 0; }
