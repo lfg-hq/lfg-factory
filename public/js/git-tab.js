@@ -181,38 +181,62 @@
       if (!compact) wrap.append(button('Review first, then create PR', () => { closeDrawer(); startReview(r.branch, r.destination); }));
       return wrap;
     }
-    function directPR(r) {
-      const { d, content } = dialog('Create pull request');
-      content.append(el('div', undefined, 'git-route'));
-      content.lastChild.append(el('code', r.branch), el('span', '→'), el('code', r.destination));
+    // Shared description editor: drafts with AI on open, stays editable, and can redraft
+    // with a note. `existing` is an open PR to update instead of creating a new one.
+    function prEditor(r, existing) {
+      const { d, content } = dialog(existing ? `Rewrite description · PR #${existing.id}` : 'Create pull request');
+      const route = el('div', undefined, 'git-route'); route.append(el('code', r.branch), el('span', '→'), el('code', r.destination)); content.append(route);
       const ahead = r.integration.ahead;
-      if (ahead != null) content.append(el('p', `${ahead} commit${ahead === 1 ? '' : 's'} on this branch ${ahead === 1 ? 'isn’t' : 'aren’t'} in ${r.destination} yet.`, 'git-muted'));
+      if (!existing && ahead != null) content.append(el('p', `${ahead} commit${ahead === 1 ? '' : 's'} on this branch ${ahead === 1 ? 'isn’t' : 'aren’t'} in ${r.destination} yet.`, 'git-muted'));
       const titleLabel = el('label', 'Title'), title = el('input'); title.type = 'text'; title.maxLength = 250;
-      title.value = `${rowKey(r) ? rowKey(r) + ' · ' : ''}${r.name}`; titleLabel.append(title);
-      const lines = [];
-      if (r.tickets) {
-        const done = r.tickets.filter(t => t.branch && t.integration.status === 'integrated');
-        if (done.length) { lines.push('Tickets included in this epic:'); for (const t of done) lines.push(`- ${t.ticketKey ? t.ticketKey + ' · ' : ''}${t.name}`); }
-      }
-      lines.push('', `Raised from LFG · ${r.branch} → ${r.destination}`);
-      const bodyLabel = el('label', 'Description'), body = el('textarea'); body.rows = 10; body.maxLength = 40000; body.value = lines.join('\n').trim(); bodyLabel.append(body);
+      title.value = existing?.title || `${rowKey(r) ? rowKey(r) + ' · ' : ''}${r.name}`; titleLabel.append(title);
+      const bodyLabel = el('label', 'Description'), body = el('textarea'); body.rows = 16; body.maxLength = 40000; bodyLabel.append(body);
+      const status = el('p', '', 'git-muted git-draft-status'); status.setAttribute('role', 'status');
+      const noteLabel = el('label', 'Anything the reviewer should know? (optional, used when you redraft)'), note = el('textarea'); note.rows = 2; note.maxLength = 4000; noteLabel.append(note);
       const error = el('p', '', 'git-notice'); error.setAttribute('role', 'alert');
-      const create = button('Create pull request', async () => {
+      const submit = button(existing ? 'Update pull request' : 'Create pull request', async () => {
         if (!title.value.trim()) { error.textContent = 'Add a title.'; title.focus(); return; }
-        create.disabled = true; error.textContent = 'Checking for an existing pull request and creating…';
+        if (!body.value.trim()) { error.textContent = 'Add a description, or wait for the draft.'; return; }
+        submit.disabled = true; error.textContent = existing ? 'Updating the pull request…' : 'Checking for an existing pull request and creating…';
         try {
-          const result = await api('/pull-requests/direct', { headRef: r.branch, baseRef: r.destination, title: title.value, body: body.value });
+          const result = existing
+            ? await api('/pull-requests/update-description', { number: existing.id, title: title.value, body: body.value })
+            : await api('/pull-requests/direct', { headRef: r.branch, baseRef: r.destination, title: title.value, body: body.value });
           if (!d.open) return;
-          content.replaceChildren(el('h3', result.existing ? 'A pull request was already open' : 'Pull request created'), link(result.pullRequest));
+          content.replaceChildren(el('h3', existing ? 'Description updated' : result.existing ? 'A pull request was already open' : 'Pull request created'), link(result.pullRequest));
           d.addEventListener('close', () => load(true, true), { once: true });
-        } catch (e) { if (d.open) { error.textContent = e.message; create.disabled = false; } }
+        } catch (e) { if (d.open) { error.textContent = e.message; submit.disabled = false; } }
       });
-      create.classList.add('git-primary');
-      const reviewInstead = button('Review first instead', () => { d.close(); startReview(r.branch, r.destination); });
-      const foot = el('div', undefined, 'git-dialog-actions'); foot.append(create, reviewInstead);
-      content.append(titleLabel, bodyLabel, error, foot, el('small', 'Creating a PR doesn’t merge anything or approve the epic.'));
-      title.focus();
+      submit.classList.add('git-primary');
+      let drafting = false;
+      const redraft = button('Redraft with AI', () => draft());
+      async function draft() {
+        if (drafting) return; drafting = true;
+        redraft.disabled = submit.disabled = body.disabled = true; error.textContent = '';
+        status.textContent = 'Writing the description from the tickets, documents and the diff… this can take up to a minute.';
+        try {
+          const result = await api('/pull-requests/describe', { headRef: r.branch, baseRef: r.destination, note: note.value });
+          if (!d.open) return;
+          title.value = result.title || title.value; body.value = result.body;
+          const st = result.stats;
+          status.textContent = st ? `Drafted from ${st.commits} commits and ${st.files} files (${st.sampled} read in detail). Edit anything before you ${existing ? 'update' : 'create'}.` : 'Drafted. Edit anything before you continue.';
+        } catch (e) {
+          if (!d.open) return;
+          status.textContent = '';
+          error.textContent = `Couldn’t draft a description: ${e.message}`;
+          if (!body.value.trim() && !existing) {
+            const lines = [];
+            if (r.tickets) for (const t of r.tickets.filter(t => t.branch && t.integration.status === 'integrated')) lines.push(`- ${t.ticketKey ? t.ticketKey + ' · ' : ''}${t.name}`);
+            body.value = `${lines.length ? 'Tickets included:\n' + lines.join('\n') + '\n\n' : ''}Raised from LFG · ${r.branch} → ${r.destination}`;
+          }
+        } finally { drafting = false; redraft.disabled = submit.disabled = body.disabled = false; }
+      }
+      const foot = el('div', undefined, 'git-dialog-actions'); foot.append(submit, redraft);
+      if (!existing) foot.append(button('Review first instead', () => { d.close(); startReview(r.branch, r.destination); }));
+      content.append(titleLabel, status, bodyLabel, noteLabel, error, foot, el('small', existing ? 'This replaces the PR’s title and description on the provider.' : 'Creating a PR doesn’t merge anything or approve the epic.'));
+      draft();
     }
+    const directPR = r => prEditor(r);
     function fact(label, value) { const n = el('div', undefined, 'git-fact'); n.append(el('dt', label)); const dd = el('dd'); if (value instanceof Node) dd.append(value); else dd.textContent = value; n.append(dd); return n; }
     function details(r, historyHead) {
       const n = el('div', undefined, 'git-detail-body');
@@ -243,6 +267,7 @@
       const facts = el('dl', undefined, 'git-facts');
       const prBox = el('div');
       for (const pr of r.pullRequests) prBox.append(link(pr), el('small', pr.draft ? 'Draft' : 'Open · checks and reviews are shown on the PR'));
+      if (data.canManageCode) for (const pr of r.pullRequests) prBox.append(button('Rewrite description with AI', () => { closeDrawer(); prEditor(r, pr); }));
       if (!r.pullRequests.length) prBox.append(el('span', data.completeness.pullRequests ? 'None open' : 'Unknown — PR list didn’t fully load', 'git-muted'));
       facts.append(fact('Pull request', prBox));
       const commit = data.graph?.nodes.find(c => c.sha === r.headSha);

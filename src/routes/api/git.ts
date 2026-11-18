@@ -23,6 +23,7 @@ import { queueReview, retryReview, priorReviews, createReviewedPR, createDirectP
 type AuthEnv = { Variables: { user: typeof auth.$Infer.Session.user; session: typeof auth.$Infer.Session.session; gitErrorCode: string; gitPartial: boolean } };
 import { logGitRequest } from '../../services/git-logging.ts';
 import { isSameOrigin } from '../../utils/same-origin.ts';
+import { draftPRDescription, updatePRDescription } from '../../services/git-pr-description.ts';
 export { logGitRequest } from '../../services/git-logging.ts';
 const gitApi = new Hono<AuthEnv>();
 gitApi.use('/projects/:projectId/git/*', async (c, next) => {
@@ -130,7 +131,7 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
 // Findings contain private repository information, so even polling requires Git access.
 for (const route of [
   ['POST', 'reviews'], ['GET', 'reviews'], ['GET', 'reviews/:id'],
-  ['POST', 'reviews/:id/retry'], ['POST', 'pull-requests'], ['POST', 'pull-requests/direct'],
+  ['POST', 'reviews/:id/retry'], ['POST', 'pull-requests'], ['POST', 'pull-requests/direct'], ['POST', 'pull-requests/describe'], ['POST', 'pull-requests/update-description'],
 ] as const) {
   gitApi.on(route[0], `/projects/:projectId/git/${route[1]}`, async c => {
     const correlationId = c.res.headers.get('X-Correlation-ID')!;
@@ -154,6 +155,8 @@ for (const route of [
         const review = await queueReview(access.project, c.get('user').id, provider, input.headRef, input.baseRef, correlationId);
         return c.json({ review, correlationId }, 202);
       }
+      if (route[1] === 'pull-requests/describe') return c.json({ ...await draftPRDescription(access.project, c.get('user').id, provider, input), correlationId });
+      if (route[1] === 'pull-requests/update-description') return c.json({ ...await updatePRDescription(provider, input), correlationId });
       if (route[1] === 'pull-requests/direct') return c.json({ ...await createDirectPR(access.project, c.get('user').id, provider, input, correlationId), correlationId });
       const id = route[1] === 'pull-requests' ? input.reviewId : c.req.param('id');
       const [row] = await db.select().from(gitReviews).where(and(eq(gitReviews.id, id || ''), eq(gitReviews.projectId, access.project.id))).limit(1);
@@ -180,6 +183,10 @@ for (const route of [
         ORIGIN_DENIED: 'This request did not come from an LFG page. Reload LFG and retry.',
         CODE_PERMISSION_REQUIRED: 'You need code-management permission on this project to create pull requests.',
         INVALID_PR_DETAILS: 'Add a PR title (up to 250 characters) and retry.',
+        MODEL_ACCESS_BLOCKED: 'No AI model is available to write the description. Connect a model in Settings → LLM Keys (or your subscription), or write the description yourself.',
+        DESCRIPTION_MODEL_FAILED: 'The AI model didn\'t return a description. Retry, or write it yourself.',
+        NOTHING_TO_MERGE: 'This branch has no changes compared with the destination.',
+        INVALID_PR_NUMBER: 'That pull request number isn\'t valid.',
         INVALID_REFS: 'Source and destination must be two different, valid branch names.',
         DUPLICATE_LOOKUP_INCOMPLETE: 'Could not load the full list of open PRs to check for a duplicate. Refresh and retry.',
       };
