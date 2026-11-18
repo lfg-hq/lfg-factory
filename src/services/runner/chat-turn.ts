@@ -190,8 +190,8 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
 
   const stopWatching = watchJob(job.id, (update: JobUpdate) => {
     switch (update.type) {
-      case "offered": input.onStatus(`Sent to ${update.deviceName}…`); return;
-      case "accepted": started = true; input.onStatus(`${label} on ${update.deviceName} is working…`); return;
+      case "offered": input.onStatus(`Sent to your computer…`); return;
+      case "accepted": started = true; input.onStatus(`${label} is working…`); return;
       case "rejected": finish(new Error(`Your computer declined this: ${update.reason ?? "no reason given"}`)); return;
       case "event": onEvent(update.event); return;
       case "finished": finish(update.ok ? undefined : new Error(update.error || `${label} on your computer stopped with an error.`)); return;
