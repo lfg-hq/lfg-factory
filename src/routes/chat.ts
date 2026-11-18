@@ -62,39 +62,9 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
   );
 }
 
-chat.get("/chat/project/:projectId", async (c) => {
-  // ?new=1 forces a fresh chat (used by "New chat" button)
-  if (c.req.query("new")) {
-    return handleChatPage(c);
-  }
-
-  const user = c.get("user");
-  const { projectId } = c.req.param();
-
-  // If no conversation specified, redirect to the most recent one (excluding instant app conversations)
-  const [latest] = await db
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.projectId, projectId),
-        eq(conversations.userId, user.id),
-        notExists(
-          db.select({ id: instantApps.id }).from(instantApps)
-            .where(eq(instantApps.conversationId, conversations.id))
-        )
-      )
-    )
-    .orderBy(desc(conversations.updatedAt))
-    .limit(1);
-
-  if (latest) {
-    return c.redirect(`/chat/project/${projectId}/conversation/${latest.id}`);
-  }
-
-  // No conversations yet — render fresh chat
-  return handleChatPage(c);
-});
+// Chat opens a new chat. Reopening the most recent one meant loading and scrolling
+// through a long history every time; it is one click away in Recent chats.
+chat.get("/chat/project/:projectId", (c) => handleChatPage(c));
 chat.get("/chat/project/:projectId/conversation/:conversationId", (c) => {
   const { conversationId } = c.req.param();
   return handleChatPage(c, conversationId);

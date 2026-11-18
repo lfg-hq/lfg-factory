@@ -4524,6 +4524,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return all.length ? all[all.length - 1] : null;
     }
 
+    // Cards, diagrams and images in the history finish rendering after the first jump and
+    // push the latest message down. Stay at the bottom while they settle (up to 5s; diagrams load a large library),
+    // unless the user scrolls up or opens another chat.
+    function holdAtBottomWhileSettling(loadVersion) {
+        const until = performance.now() + 5000;
+        let lastHeight = chatMessages.scrollHeight;
+        const tick = () => {
+            if (loadVersion !== conversationLoadVersion || userScrolledUp || performance.now() > until) return;
+            if (chatMessages.scrollHeight !== lastHeight) {
+                lastHeight = chatMessages.scrollHeight;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                lastScrollTop = chatMessages.scrollTop;
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    }
+
     function scrollToBottom(force = false) {
         if (force) {
             upwardIntent = false;
@@ -5137,7 +5155,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Open at the latest message, or at the very first when jumping to the start.
-            if (all) { userScrolledUp = true; chatMessages.scrollTop = 0; } else scrollToBottom(true);
+            if (all) { userScrolledUp = true; chatMessages.scrollTop = 0; } else { scrollToBottom(true); holdAtBottomWhileSettling(loadVersion); }
         } catch (error) {
             console.error('Error loading conversation:', error);
         } finally {

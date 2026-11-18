@@ -142,7 +142,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
   <link rel="stylesheet" href="/public/css/project-home.css?v=20261116-calls" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261117-panel-inset" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />

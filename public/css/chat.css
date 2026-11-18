@@ -401,7 +401,9 @@
     flex-direction: column;
     width: 100%;
     align-items: center;
-    scroll-behavior: smooth;
+    /* Instant: smooth scrolling animated every jump to the latest message, so opening a
+       chat crawled down the whole page while cards and diagrams kept growing it. */
+    scroll-behavior: auto;
     min-height: 0; /* allow flex child to shrink */
     /* Browser anchors scroll position to the topmost stable element so
        removing transient bottom items (typing indicator, progress chip,
