@@ -86,6 +86,10 @@ export const createTickets = tool({
   })),
   execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets, ...rest }, options) => {
     const turnId = (rest as { turnId?: string }).turnId;
+    // The person reviews a feature's requirements and technical docs before it becomes tickets.
+    const { ticketsBeforeDocReview } = await import("../../services/review-gates.ts");
+    const docsUnreviewed = await ticketsBeforeDocReview(projectId, conversationId);
+    if (docsUnreviewed) return { success: false, awaitingUserReview: true, error: docsUnreviewed };
     const approvedDesigns = await readApprovedDesigns(projectId, tickets.flatMap((t) => t.approvedDesignDocumentIds ?? []));
     // Fetch all stages for this project so we can validate stageId
     const allStages = await db.select().from(ticketStages)
@@ -470,6 +474,10 @@ export const startBuildRun = tool({
       "What to do when every ticket is built. 'preview' (default) starts the epic branch and returns a URL the user can test on; 'none' just reports completion."),
   })),
   execute: async ({ projectId, userId, conversationId, ticketIds, epicId, afterBuild }) => {
+    // Tickets made in this turn are shown to the person before anything builds.
+    const { buildBeforeTicketReview } = await import("../../services/review-gates.ts");
+    const ticketsUnreviewed = await buildBeforeTicketReview(ticketIds, conversationId);
+    if (ticketsUnreviewed) return { success: false, awaitingUserReview: true, error: ticketsUnreviewed };
     const { createBuildRun } = await import("../../services/build-queue.ts");
     const res = await createBuildRun({
       projectId, userId,
@@ -524,6 +532,10 @@ export const queueTicketExecution = tool({
   execute: async ({ ticketId, notes, conversationId, userId }) => {
     const [row] = await db.select({ projectId: projectTickets.projectId, queueStatus: projectTickets.queueStatus }).from(projectTickets).where(eq(projectTickets.id, ticketId));
     if (!row) throw new Error("Ticket not found");
+    // One fix may be filed and queued in a turn; a feature's new ticket set waits for the person.
+    const { buildBeforeTicketReview } = await import("../../services/review-gates.ts");
+    const unreviewed = await buildBeforeTicketReview([ticketId], conversationId, { allowSingleFix: true });
+    if (unreviewed) return { success: false, awaitingUserReview: true, ticketId, error: unreviewed };
     if (/^(queued|executing|stopping)$/.test(row.queueStatus)) throw new Error("This ticket already has an active operation.");
     const claimed = await db.update(projectTickets).set({ queueStatus: "queued", queuedAt: new Date(), notes: notes ?? undefined, updatedAt: new Date() }).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, row.queueStatus))).returning({id:projectTickets.id});
     if (!claimed.length) throw new Error("Another operation claimed this ticket.");

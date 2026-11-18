@@ -459,7 +459,12 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   const runnerContent = `#!/bin/bash
 export HOME=/root
 umask 077
-trap 'rm -f ${oauthTokenFile}' EXIT
+# Pi only takes a ChatGPT subscription token from its sign-in file; --api-key is
+# ignored for openai-codex ("No API key found for openai-codex"). The entry holds the
+# short-lived access token only (never the refresh credential) and is removed on exit.
+PI_CODEX_AUTH=/root/.pi/agent/auth.json
+pi_codex_auth() { node -e 'const fs=require("fs"),f=process.argv[1],t=process.env.PI_OAUTH_TOKEN;let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(!t){delete c["openai-codex"]}else{let p={};try{p=JSON.parse(Buffer.from(t.split(".")[1],"base64url").toString())}catch{}const a=(p["https://api.openai.com/auth"]||{}).chatgpt_account_id;c["openai-codex"]={type:"oauth",access:t,refresh:"",expires:p.exp?p.exp*1000:Date.now()+3000000,...(a?{accountId:a}:{})}}fs.mkdirSync(require("path").dirname(f),{recursive:true});fs.writeFileSync(f,JSON.stringify(c),{mode:0o600});fs.chmodSync(f,0o600)' "\$PI_CODEX_AUTH" 2>/dev/null || true; }
+trap 'rm -f ${oauthTokenFile}; PI_OAUTH_TOKEN= pi_codex_auth' EXIT
 # Write an immediate start marker so an EARLY death (killed during env/node/pi setup,
 # before the diagnostics below) still leaves evidence instead of an empty output file.
 echo "[pi-runner] START model=${cfg.piName}/${opts.modelId} $(date -u +%H:%M:%S)" >> ${outputFile}
@@ -596,14 +601,13 @@ fi
 # server console, so every build records exactly what node/pi it ran on.
 echo "___PI_VERSIONS node=\$(node -v 2>/dev/null) pi=\$(pi --version 2>/dev/null)" >> ${outputFile}
 
-# OAuth builds receive only a short-lived bearer. Read it into a non-exported shell
-# variable and unlink the transfer file before Pi starts, so project subprocesses and
-# the coding agent's shell tools cannot read it from disk or their environment.
+# OAuth builds receive only a short-lived bearer (never the refresh credential). Pi
+# reads it from its own sign-in file (see pi_codex_auth), removed again when the run ends.
 PI_AUTH_ARGS=()
 if [ -s ${oauthTokenFile} ]; then
   IFS= read -r PI_OAUTH_TOKEN < ${oauthTokenFile}
   rm -f ${oauthTokenFile}
-  PI_AUTH_ARGS=(--api-key "\$PI_OAUTH_TOKEN")
+  PI_OAUTH_TOKEN="\$PI_OAUTH_TOKEN" pi_codex_auth
 fi
 
 # The provider key is embedded directly in models.json (Pi does not expand env-var
