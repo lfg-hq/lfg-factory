@@ -42,7 +42,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
-  <link rel="stylesheet" href="/public/css/git-tab.css" />
+  <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261117-local-usage" />
@@ -592,7 +592,7 @@ export function ChatPage({
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
-  <script src="/public/js/git-tab.js"></script>
+  <script src="/public/js/git-tab.js?v=20261118"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>

@@ -18,10 +18,11 @@ import { ticketExecutions } from '../../db/schema/orchestrator.ts';
 import { eq, and } from 'drizzle-orm';
 import { gitReviews } from '../../db/schema/git-reviews.ts';
 import { gitContext } from '../../services/git-context.ts';
-import { queueReview, retryReview, priorReviews, createReviewedPR, reviewBody, reviewRepository, ReviewError } from '../../services/git-review.ts';
+import { queueReview, retryReview, priorReviews, createReviewedPR, createDirectPR, reviewBody, reviewRepository, ReviewError } from '../../services/git-review.ts';
 
 type AuthEnv = { Variables: { user: typeof auth.$Infer.Session.user; session: typeof auth.$Infer.Session.session; gitErrorCode: string; gitPartial: boolean } };
 import { logGitRequest } from '../../services/git-logging.ts';
+import { isSameOrigin } from '../../utils/same-origin.ts';
 export { logGitRequest } from '../../services/git-logging.ts';
 const gitApi = new Hono<AuthEnv>();
 gitApi.use('/projects/:projectId/git/*', async (c, next) => {
@@ -129,14 +130,13 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
 // Findings contain private repository information, so even polling requires Git access.
 for (const route of [
   ['POST', 'reviews'], ['GET', 'reviews'], ['GET', 'reviews/:id'],
-  ['POST', 'reviews/:id/retry'], ['POST', 'pull-requests'],
+  ['POST', 'reviews/:id/retry'], ['POST', 'pull-requests'], ['POST', 'pull-requests/direct'],
 ] as const) {
   gitApi.on(route[0], `/projects/:projectId/git/${route[1]}`, async c => {
     const correlationId = c.res.headers.get('X-Correlation-ID')!;
     try {
       if (route[0] === 'POST') {
-        const origin = c.req.header('Origin');
-        if (origin && origin !== new URL(c.req.url).origin) throw new ReviewError('ORIGIN_DENIED', 403);
+        if (!isSameOrigin(c)) throw new ReviewError('ORIGIN_DENIED', 403);
         if (!c.req.header('Content-Type')?.startsWith('application/json')) throw new ReviewError('JSON_REQUIRED', 400);
         if (Number(c.req.header('Content-Length') || 0) > 60_000) throw new ReviewError('REQUEST_TOO_LARGE', 400);
       }
@@ -154,6 +154,7 @@ for (const route of [
         const review = await queueReview(access.project, c.get('user').id, provider, input.headRef, input.baseRef, correlationId);
         return c.json({ review, correlationId }, 202);
       }
+      if (route[1] === 'pull-requests/direct') return c.json({ ...await createDirectPR(access.project, c.get('user').id, provider, input, correlationId), correlationId });
       const id = route[1] === 'pull-requests' ? input.reviewId : c.req.param('id');
       const [row] = await db.select().from(gitReviews).where(and(eq(gitReviews.id, id || ''), eq(gitReviews.projectId, access.project.id))).limit(1);
       if (!row || row.repo !== reviewRepository(provider) || row.provider !== provider.provider) throw new ReviewError('REVIEW_NOT_FOUND', 404);
@@ -176,6 +177,11 @@ for (const route of [
         PR_CREATION_UNCERTAIN: 'Creation may have reached the provider. Check open PRs, then retry confirmation to reconcile; no second creation will be sent.',
         ACKNOWLEDGMENT_REQUIRED: 'Read and acknowledge the findings before confirming creation.',
         GIT_DISCONNECTED: 'Connect your Git account in Settings → Integrations and retry.',
+        ORIGIN_DENIED: 'This request did not come from an LFG page. Reload LFG and retry.',
+        CODE_PERMISSION_REQUIRED: 'You need code-management permission on this project to create pull requests.',
+        INVALID_PR_DETAILS: 'Add a PR title (up to 250 characters) and retry.',
+        INVALID_REFS: 'Source and destination must be two different, valid branch names.',
+        DUPLICATE_LOOKUP_INCOMPLETE: 'Could not load the full list of open PRs to check for a duplicate. Refresh and retry.',
       };
       const status = e instanceof PermissionError ? 403 : e instanceof GitProviderError && [400, 403, 404, 409, 422].includes(e.status) ? e.status : 502;
       return c.json({ error: messages[code] || 'Unable to complete this Git operation. Check project permissions and connected Git/model accounts, then retry.', code, correlationId }, status as 400 | 403 | 404 | 409 | 422 | 502);
@@ -187,8 +193,7 @@ for (const [method, path] of [['GET', 'pull-requests/:number/merge-state'], ['PO
     const correlationId = c.res.headers.get('X-Correlation-ID')!;
     try {
       if (method !== 'GET') {
-        const origin = c.req.header('Origin');
-        if (origin && origin !== new URL(c.req.url).origin) throw new GitProviderError('ORIGIN_DENIED', 403);
+        if (!isSameOrigin(c)) throw new GitProviderError('ORIGIN_DENIED', 403);
         if (!c.req.header('Content-Type')?.startsWith('application/json')) throw new GitProviderError('JSON_REQUIRED', 400);
       }
       const access = await getProjectAccess(c.req.param('projectId')!, c.get('user').id);

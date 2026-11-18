@@ -11,6 +11,7 @@ import { execOnWorkspace, setNoSleep } from '../../services/mags.ts';
 import { openTicketWorkspace, withTicketWorkspaceLock } from '../../services/ticket-workspace.ts';
 import { checkpointTicketWorkspace } from '../../services/ticket-workspace-checkpoint.ts';
 import type { auth } from '../../auth/index.ts';
+import { isSameOrigin } from '../../utils/same-origin.ts';
 const opening = new Map<string, {message:string; result?:Awaited<ReturnType<typeof openTicketWorkspace>>; error?:string}>();
 const api = new Hono<{ Variables: { user: typeof auth.$Infer.Session.user } }>();
 api.use('*', requireAuth as any);
@@ -24,8 +25,7 @@ api.all('/:projectId/tickets/:ticketId/code/:action', async c => {
   if (!['tree', 'file', 'save', 'commit', 'exec'].includes(action)) return c.json({ error: 'Not found' }, 404);
   if (c.req.method !== (mutate ? 'POST' : 'GET')) return c.json({ error: 'Method not allowed' }, 405);
   if (mutate) {
-    const origin = c.req.header('Origin');
-    if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: 'Invalid origin' }, 403);
+    if (!isSameOrigin(c)) return c.json({ error: 'Invalid origin' }, 403);
     if (!access.permissions.canEditFiles) return c.json({ error: 'You do not have permission to edit this project' }, 403);
     if (ticket.queueStatus === 'executing' || isChatTurnActive(ticketId)) return c.json({ error: 'An agent is working on this ticket. Wait for it to finish before editing or running commands.' }, 409);
   }
