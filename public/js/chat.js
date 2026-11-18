@@ -100,6 +100,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Track whether messages have been loaded to prevent duplicate loading
     let conversationLoadedViaRest = false;
     let conversationLoadVersion = 0;
+    // Assigned once the input is set up (below). Declared here because opening a chat
+    // from its URL calls loadConversation() first, which cancels any dictation.
+    let dictation = null;
 
     // Extract project ID from path
     const pathProjectId = extractProjectIdFromPath();
@@ -663,7 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Stop inserts a draft; the explicit recording Send button finalizes then submits.
-    const dictation = window.createDictation?.({
+    dictation = window.createDictation?.({
         onSend: () => chatForm.requestSubmit(),
         button: document.getElementById('record-audio-btn'), input: chatInput,
         wrapper: document.querySelector('#chat-form .input-wrapper'),
@@ -5104,6 +5107,11 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[loadConversation] response status:', response.status);
             if (!response.ok) {
                 console.error('[loadConversation] Failed:', response.status, await response.text());
+                // A deleted chat (or one you can no longer open): start a new chat
+                // instead of leaving "Loading conversation…" on screen.
+                if ((response.status === 404 || response.status === 403) && loadVersion === conversationLoadVersion && currentProjectId) {
+                    window.location.replace('/chat/project/' + encodeURIComponent(currentProjectId) + '?new=1');
+                }
                 return;
             }
             const data = await response.json();
