@@ -277,7 +277,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load saved width from localStorage if available
     const savedWidth = localStorage.getItem('artifacts_width');
     if (savedWidth && !isNaN(parseInt(savedWidth))) {
-        panelWidth = parseInt(savedWidth);
+        // A width saved on a wider screen can be wider than this window; then the panel
+        // covers the whole page and its contents sit off-screen. Keep it within the same
+        // bounds as dragging (250px to 75% of the window).
+        panelWidth = Math.max(250, Math.min(parseInt(savedWidth), Math.round(window.innerWidth * 0.75)));
         artifactsPanel.style.width = panelWidth + 'px';
         
         // Only update chat container if panel is expanded

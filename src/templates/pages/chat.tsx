@@ -584,7 +584,7 @@ export function ChatPage({
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/artifacts-loader.js?v=20261118-docs-fast"></script>
   <script src="/public/js/document-comments.js"></script>
-  <script src="/public/js/artifacts.js"></script>
+  <script src="/public/js/artifacts.js?v=20261118-panel-fit"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
