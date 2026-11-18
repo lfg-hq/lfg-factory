@@ -268,6 +268,21 @@ async function approvePreview(job: PreviewJobOffer, commands: string[]) {
   return { approved: true as const };
 }
 
+/** A preview needs a Node.js this computer doesn't have: ask before downloading it from nodejs.org. */
+async function approveNodeDownload(info: { projectName: string; version: string; reason: string; folder: string }) {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    buttons: [`Download Node.js ${info.version}`, "Not now"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `${info.projectName} needs Node.js ${info.version}`,
+    detail: `${info.reason.charAt(0).toUpperCase()}${info.reason.slice(1)}, and no Node.js on this computer fits.\n\n` +
+      `LFG Desktop can download the official Node.js ${info.version} from nodejs.org (about 50 MB, checked against nodejs.org's checksums) into:\n${info.folder}\n\n` +
+      "It's used only for LFG previews; your own Node.js setup isn't changed.",
+  });
+  return response === 0;
+}
+
 function startRunner() {
   runner?.stop();
   runner = null;
@@ -284,6 +299,7 @@ function startRunner() {
     appVersion: app.getVersion(),
     approve,
     approvePreview,
+    approveNodeDownload,
     onState: (state, detail) => {
       runnerStatus = { state, detail };
       refreshTray();

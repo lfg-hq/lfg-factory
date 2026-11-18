@@ -15,12 +15,13 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import os from "node:os";
 import { join } from "node:path";
 import type { PreviewPayload, PreviewPlan, PreviewStep, PreviewUpdate, PreviewUrl } from "./protocol.ts";
 import { mustRun, run } from "./proc.ts";
+import { chooseDownload, currentNode, describe, downloadNode, fmt, installedNodes, nodeRequirements, pickInstalled, unmet, withNode, type NodeInstall, type Version } from "./node-runtime.ts";
 
 export interface PreviewContext {
   workRoot: string;
@@ -30,6 +31,8 @@ export interface PreviewContext {
   allowLocalRepos?: boolean;
   /** How long to wait for an app to answer on its port. Default 5 minutes. */
   startTimeoutMs?: number;
+  /** Ask the person before downloading a Node.js the project needs. Absent: never download. */
+  approveNodeDownload?(info: { version: string; reason: string; folder: string }): Promise<boolean>;
 }
 
 const REF = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}$/;
@@ -139,7 +142,7 @@ export function localizeCommand(cmd: string, dir: string): string {
 
 // ── One running preview ──────────────────────────────────────────────
 
-interface Meta { branch: string | null; installedCommit?: string; seeded?: string[] }
+interface Meta { branch: string | null; installedCommit?: string; installedNode?: string; seeded?: string[] }
 
 export class PreviewStopped extends Error { constructor() { super("Stopped"); } }
 
@@ -292,20 +295,46 @@ export class LocalPreview {
       });
     }
 
-    // 3. Install and build (skipped on a plain restart of what's already installed).
-    const fresh = this.readMeta()?.installedCommit !== commit;
+    // 3. The Node.js this app needs (a JavaScript app only).
+    const usesNode = existsSync(join(this.dir, "package.json"));
+    let node: Version | null = null;
+    if (usesNode) {
+      node = await this.step("node", "Pick the Node.js version", "installing", () => this.chooseNode(appEnv));
+    }
+
+    // 4. Install and build (skipped on a plain restart of what's already installed).
+    const before = this.readMeta();
+    const fresh = before?.installedCommit !== commit || (!!node && before?.installedNode !== fmt(node));
+    if (fresh && node && before?.installedNode && before.installedNode !== fmt(node)) {
+      // Native modules were compiled for the other Node; start from a clean install.
+      this.log(`Switching from Node ${before.installedNode} to ${fmt(node)}: reinstalling dependencies.`);
+      rmSync(join(this.dir, "node_modules"), { recursive: true, force: true });
+    }
     if (plan.installCmd) {
-      if (fresh) await this.step("install", "Install dependencies", "installing", () => this.shell(plan.installCmd!, appEnv), plan.installCmd);
-      else this.skip("install", "Install dependencies", "already installed for this commit");
+      if (fresh) {
+        await this.step("install", "Install dependencies", "installing", async () => {
+          await this.shell(plan.installCmd!, appEnv);
+          // Installed packages can need a newer Node than the project says (Next.js 16: >= 20.9).
+          if (node && unmet(node, nodeRequirements(this.dir)).length) {
+            const next = await this.chooseNode(appEnv);
+            if (next && fmt(next) !== fmt(node)) {
+              node = next;
+              this.log(`Reinstalling dependencies with Node ${fmt(node)}.`);
+              rmSync(join(this.dir, "node_modules"), { recursive: true, force: true });
+              await this.shell(plan.installCmd!, appEnv);
+            }
+          }
+        }, plan.installCmd);
+      } else this.skip("install", "Install dependencies", "already installed for this commit");
     }
     const builds = [plan.buildCmd, ...(plan.services ?? []).map(s => s.buildCmd)].filter((c): c is string => !!c);
     if (builds.length) {
       if (fresh) await this.step("build", "Build", "installing", async () => { for (const b of builds) await this.shell(b, appEnv); }, builds.join(" && "));
       else this.skip("build", "Build", "already built for this commit");
     }
-    this.writeMeta({ ...(this.readMeta() ?? { branch: p.branch }), installedCommit: commit });
+    this.writeMeta({ ...(this.readMeta() ?? { branch: p.branch }), installedCommit: commit, ...(node ? { installedNode: fmt(node) } : {}) });
 
-    // 4. Schema and seed data.
+    // 5. Schema and seed data.
     if (plan.migrations?.length) {
       await this.step("migrate", "Set up the database schema", "seeding", async () => { for (const m of plan.migrations!) await this.shell(m, appEnv); }, plan.migrations.join(" && "));
     }
@@ -319,7 +348,7 @@ export class LocalPreview {
       }
     }
 
-    // 5. Start the app(s).
+    // 6. Start the app(s).
     const apps = [{ name: "web", runCmd: plan.runCmd, port: plan.port, dir: undefined as string | undefined, primary: true },
       ...(plan.services ?? []).map(s => ({ ...s, primary: false }))];
     for (const a of apps) appEnv[`${a.name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_BASE_URL`] = `http://localhost:${a.port}`;
@@ -333,6 +362,38 @@ export class LocalPreview {
     this.log(`Running on this computer: ${urls.map(u => u.url).join(", ")}`);
     this.report({ status: "running", urls, error: "" });
     return urls;
+  }
+
+  /**
+   * Make `env` run a Node.js that meets what the project (and its packages) need: the shell's
+   * default if it does, else one already installed (nvm, fnm, Volta, asdf, Homebrew, LFG's
+   * own), else, with the person's OK, the official build from nodejs.org. Returns its version.
+   */
+  private async chooseNode(env: NodeJS.ProcessEnv): Promise<Version | null> {
+    const reqs = nodeRequirements(this.dir);
+    const current = await currentNode(env);
+    if (!reqs.length || (current && !unmet(current, reqs).length)) {
+      if (current) this.log(`Node.js ${fmt(current)}${reqs.length ? ` meets what this app needs (${describe(reqs)})` : ""}.`);
+      return current;
+    }
+    const why = describe(current ? unmet(current, reqs) : reqs);
+    const use = (n: NodeInstall) => {
+      Object.assign(env, withNode(env, n.bin));
+      this.log(`${current ? `Your default Node.js is ${fmt(current)}, but ${why}.` : `No Node.js on your PATH; ${why}.`} Using Node.js ${fmt(n.version)} (${n.source}).`);
+      return n.version;
+    };
+    const installed = pickInstalled(installedNodes(this.ctx.workRoot), reqs);
+    if (installed) return use(installed);
+
+    const version = await chooseDownload(reqs).catch(() => null);
+    if (!version) throw new Error(`This app needs a different Node.js (${why}), and none on this computer fits. Install one (for example with nvm), then press Update & rebuild.`);
+    const folder = join(this.ctx.workRoot, "runtimes");
+    const ok = this.ctx.approveNodeDownload
+      ? await this.ctx.approveNodeDownload({ version: fmt(version), reason: why, folder })
+      : false;
+    if (!ok) throw new Error(`This app needs Node.js ${fmt(version)} or similar (${why}). It wasn't downloaded. Install it yourself (for example \`nvm install ${version[0]}\`), then press Update & rebuild.`);
+    this.check();
+    return use(await downloadNode(version, this.ctx.workRoot, line => this.log(line)));
   }
 
   /** A database for the app: one already running here, else a Docker container, else a plain explanation. */

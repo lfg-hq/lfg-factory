@@ -56,6 +56,8 @@ export interface RunnerOptions {
   approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Ask the person whether to run this app's commands for a preview. Absent: previews are declined. */
   approvePreview?(job: PreviewJobOffer, commands: string[]): Promise<ApprovalResult>;
+  /** Ask before downloading a Node.js a preview needs. */
+  approveNodeDownload?(info: { projectName: string; version: string; reason: string; folder: string }): Promise<boolean>;
   /** How long a preview's app gets to answer on its port. */
   previewStartTimeoutMs?: number;
   /** Claude Code tools this computer allows. A job can only narrow this list. */
@@ -352,6 +354,7 @@ export class Runner {
       env: this.opts.env ?? process.env,
       allowLocalRepos: this.opts.allowLocalRepos,
       startTimeoutMs: this.opts.previewStartTimeoutMs,
+      approveNodeDownload: this.opts.approveNodeDownload ? info => this.opts.approveNodeDownload!({ ...info, projectName: p.projectName }) : undefined,
       update: update => this.send({ type: "job.preview", jobId: job.id, update }),
     });
     const entry: { jobId: string; preview: LocalPreview; stopping?: Promise<void> } = { jobId: job.id, preview };

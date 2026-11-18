@@ -60,7 +60,7 @@ test("runs a ticket's branch on this computer and reports its localhost address"
   expect(urls).toEqual([{ name: "web", url: `http://localhost:${port}`, port, primary: true }]);
   expect(await (await fetch(urls[0]!.url)).text()).toBe("ticket hi ");
   expect(run.updates.some(u => u.status === "running")).toBe(true);
-  expect(run.lastSteps().map(s => [s.id, s.status])).toEqual([["code", "done"], ["install", "done"], ["start-web", "done"]]);
+  expect(run.lastSteps().map(s => [s.id, s.status])).toEqual([["code", "done"], ["node", "done"], ["install", "done"], ["start-web", "done"]]);
   // Its own folder, checked out detached, so a build can still take the branch.
   const dir = join(workRoot, "previews", "pub-rec");
   expect(existsSync(join(dir, "installed.txt"))).toBe(true);
