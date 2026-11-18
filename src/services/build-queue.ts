@@ -136,7 +136,9 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
   // A retry may come from a different chat or the ticket view. Subsequent chain
   // responses follow that latest request instead of reviving the old destination.
   const origin = await getBuildOrigin(ticketId);
-  await db.update(agentRuns).set({ conversationId: origin.conversationId || "",
+  // A retry with no chat of its own (ticket view, the computer) keeps the run's chat:
+  // blanking it silenced "resuming" and "all built", leaving the chat stuck on "paused".
+  await db.update(agentRuns).set({ ...(origin.conversationId ? { conversationId: origin.conversationId } : {}),
     ...(origin.userId ? {userId: origin.userId} : {}), updatedAt: new Date(),
   }).where(eq(agentRuns.id, item.agentRunId));
 
