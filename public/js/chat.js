@@ -351,7 +351,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // If we have a conversation ID, load that conversation's messages
     if (currentConversationId) {
         console.log('[init] loading conversation:', currentConversationId);
-        loadConversation(currentConversationId);
+        // Run after the rest of this setup: loadConversation() uses constants declared
+        // further down (HISTORY_PAGE, dictation, …), which do not exist yet at this line.
+        const initialConversationId = currentConversationId;
+        setTimeout(() => loadConversation(initialConversationId), 0);
     }
     
     // New chat button click handler

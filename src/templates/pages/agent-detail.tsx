@@ -519,7 +519,7 @@ export function AgentDetailPage({
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
   <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261118-open-url"></script>
+  <script src="/public/js/chat.js?v=20261118-open-url2"></script>
   <script src="/public/js/agents.js"></script>
 
   <script>
