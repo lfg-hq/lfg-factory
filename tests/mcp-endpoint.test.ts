@@ -53,7 +53,7 @@ test("handshake and tool list: LFG's tools, without the fields the server fills 
 
   const list = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
   const names = list.result.tools.map((t: { name: string }) => t.name);
-  for (const n of ["createTickets", "streamDocumentContent", "getProjectDashboard", "askUser", "loadSkill"]) expect(names).toContain(n);
+  for (const n of ["createTickets", "streamDocumentContent", "getProjectDashboard", "askUser", "loadSkill", "runInPreview", "handlePreview", "getPreviewDiagnostics"]) expect(names).toContain(n);
   const create = list.result.tools.find((t: { name: string }) => t.name === "createTickets");
   expect(Object.keys(create.inputSchema.properties)).not.toContain("projectId");
   expect(Object.keys(create.inputSchema.properties)).not.toContain("userId");
