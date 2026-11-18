@@ -151,12 +151,47 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
       }
       return { files: included, excluded, limitations: ['Static review only; runtime tests were not executed.', 'Context is bounded to six source files of at most 20 KB; unchanged dependencies and runtime behavior are not exhaustively verified.'] };
     },
+    // A bounded summary of any size of change, for writing PR descriptions: commit
+    // subjects, the full file list with +/- counts, and patches for the most-changed
+    // source files up to a character budget. Unlike reviewChanges it never refuses a
+    // large diff; it just samples less of it.
+    changeSummary: async (baseSha: string, headSha: string, budget = 45_000) => {
+      const { body } = await get(gl ? `/repository/compare?from=${baseSha}&to=${headSha}&straight=false` : `/compare/${baseSha}...${headSha}`);
+      const rawCommits: any[] = Array.isArray(body.commits) ? body.commits : [];
+      const commits = rawCommits.map(c => ({ sha: String(gl ? c.id : c.sha).slice(0, 7), subject: String(gl ? c.title : c.commit?.message || '').split('\n')[0]!.slice(0, 200) })).filter(c => c.subject);
+      const rawFiles: any[] = (gl ? body.diffs : body.files) || [];
+      const secretPath = /(^|\/)(\.env(?:\..*)?|[^/]*\.(?:pem|key|p12|pfx)|credentials(?:\..*)?|\.npmrc|\.netrc|\.pypirc|id_rsa|id_ed25519)$/i;
+      const secretText = /-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:gh[pousr]_|sk-proj-|AKIA)[A-Za-z0-9]{16,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*["'][^"'\s]{12,}["']/i;
+      const noise = /(^|\/)(package-lock\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|go\.sum)$|\.(min\.js|map|snap|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+      const files = rawFiles.map(f => {
+        const patch: string = (gl ? f.diff : f.patch) || '';
+        const lines = patch.split('\n');
+        const additions = gl ? lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length : Number(f.additions) || 0;
+        const deletions = gl ? lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length : Number(f.deletions) || 0;
+        const status = gl ? (f.new_file ? 'added' : f.deleted_file ? 'removed' : f.renamed_file ? 'renamed' : 'modified') : String(f.status || 'modified');
+        return { file: String(gl ? f.new_path : f.filename), status, additions, deletions, patch };
+      });
+      const sampled: { file: string; patch: string }[] = [];
+      let used = 0;
+      for (const f of [...files].filter(f => f.patch && !secretPath.test(f.file) && !noise.test(f.file) && !secretText.test(f.patch)).sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions))) {
+        if (used >= budget) break;
+        const patch = f.patch.slice(0, Math.min(6000, budget - used));
+        used += patch.length; sampled.push({ file: f.file, patch });
+      }
+      return {
+        commits, totalCommits: gl ? commits.length : Number(body.total_commits) || commits.length,
+        files: files.map(({ patch, ...f }) => f), sampled,
+        additions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0),
+        truncated: !!(body.overflow || body.compare_timeout) || (!gl && files.length >= 300),
+      };
+    },
     createPullRequest: async (source: string, destination: string, title: string, body: string) => {
       const response = await get(gl ? '/merge_requests' : '/pulls', gl ? { source_branch: source, target_branch: destination, title, description: body } : { head: source, base: destination, title, body });
       const result = pr(response.body);
       if (!Number.isInteger(result.id) || !result.url?.startsWith('https://')) throw new GitProviderError('PROVIDER_INVALID_RESPONSE');
       return result;
     },
+    updatePullRequest: async (number: number, title: string, body: string) => pr((await get(gl ? `/merge_requests/${number}` : `/pulls/${number}`, gl ? { title, description: body } : { title, body }, gl ? 'PUT' : 'PATCH')).body),
     pullRequest: async (number: number) => pr((await get(gl ? `/merge_requests/${number}` : `/pulls/${number}`)).body),
     mergeState: async (number: number) => {
       const { body: p } = await get(gl ? `/merge_requests/${number}` : `/pulls/${number}`);
