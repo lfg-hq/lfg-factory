@@ -13,6 +13,7 @@ import {
   applicationState,
 } from "../db/schema/users.ts";
 import { sendEmail } from "../utils/email.ts";
+import { anonymousId, authMethod, captureServer } from "../services/analytics.ts";
 
 // NOTE: We do NOT use Better Auth's organization plugin because our custom
 // organization schema (organizations.ts) has additional fields (stripe, description,
@@ -139,9 +140,29 @@ export const auth = betterAuth({
 
   // Auto-create profile + llmApiKeys + applicationState on signup
   databaseHooks: {
+    // Analytics: every successful sign-in makes a session, whatever the method (password,
+    // Google/GitHub callback, email code, email link, LFG Desktop hand-off).
+    session: {
+      create: {
+        after: async (session, ctx) => {
+          const headers = ctx?.headers ?? ctx?.request?.headers;
+          const visitor = anonymousId(headers);
+          // Join the visitor's anonymous browsing (landing pages, login page) to this person.
+          if (visitor && visitor !== session.userId) {
+            captureServer("$identify", session.userId, { $anon_distinct_id: visitor }, headers);
+          }
+          captureServer("login_succeeded", session.userId, { method: authMethod(ctx?.path ?? "") ?? ctx?.path }, headers);
+        },
+      },
+    },
     user: {
       create: {
-        after: async (user) => {
+        after: async (user, ctx) => {
+          const headers = ctx?.headers ?? ctx?.request?.headers;
+          captureServer("signed_up", user.id, {
+            method: authMethod(ctx?.path ?? "") ?? ctx?.path,
+            $set: { email: user.email, name: user.name },
+          }, headers);
           try {
             await db.insert(profiles).values({
               userId: user.id,

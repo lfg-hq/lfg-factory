@@ -137,6 +137,11 @@ const envSchema = z.object({
   TURNSTILE_SITE_KEY: z.string().optional().default(""),
   TURNSTILE_SECRET_KEY: z.string().optional().default(""),
 
+  // PostHog product analytics (optional). Empty key = no tracking at all.
+  POSTHOG_KEY: z.string().optional().default(""),
+  // Ingestion host: https://us.i.posthog.com (US cloud) or https://eu.i.posthog.com (EU cloud).
+  POSTHOG_HOST: z.string().url().optional().default("https://us.i.posthog.com"),
+
   // Public Telegram bot (channel-agnostic instant app builder)
   TELEGRAM_PUBLIC_BOT_TOKEN: z.string().optional().default(""),
   TELEGRAM_PUBLIC_BOT_OWNER_ID: z.string().optional().default(""),

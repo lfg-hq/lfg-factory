@@ -59,6 +59,7 @@ import { agentWebhookRouter } from "./routes/api/agent-webhook.ts";
 import invitationRoutes from "./routes/invitations.ts";
 import shareRoutes from "./routes/share.ts";
 import { auth } from "./auth/index.ts";
+import { analyticsScript, proxyIngest, shouldInjectAnalytics, trackAuthRequest } from "./services/analytics.ts";
 import { startTicketWorker } from "./workers/ticket-executor.ts";
 import { startAgentScheduler } from "./services/agent-scheduler.ts";
 import { startGitReviewRunner, stopGitReviewRunner } from "./services/git-review.ts";
@@ -211,6 +212,22 @@ app.use("*", async (c, next) => {
 // ── Request logging ──────────────────────────────────────────────────
 app.use("*", logger());
 
+// ── PostHog analytics: add the snippet to every LFG page (off unless POSTHOG_KEY is set) ──
+// One middleware instead of editing ~45 page templates. Skips proxied user apps and APIs.
+app.use("*", async (c, next) => {
+  await next();
+  if (c.req.method !== "GET" || c.res.status !== 200 || !shouldInjectAnalytics(c.req.path)) return;
+  if (!(c.res.headers.get("Content-Type") || "").includes("text/html")) return;
+  const html = await c.res.text();
+  const at = html.search(/<\/head>/i);
+  // Routes that set the signed-in user (requireAuth / optionalAuth) let us identify them.
+  const user = (c.get as (k: string) => unknown)("user") as { id: string; email?: string; name?: string } | null | undefined;
+  const out = at < 0 ? html : html.slice(0, at) + analyticsScript(user) + html.slice(at);
+  const headers = new Headers(c.res.headers);
+  headers.delete("Content-Length");
+  c.res = new Response(out, { status: c.res.status, headers });
+});
+
 // ── Health check ────────────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok" }));
 
@@ -303,54 +320,64 @@ app.get("/accounts/agent-settings", async (c) => {
   });
 });
 
+// Better Auth requests: Turnstile check on sign-in/up, then the auth handler.
+async function handleAuthRequest(req: Request, url: URL): Promise<Response> {
+
+  // Turnstile verification for password sign-in/up and the OTP *send* step
+  // (not the OTP verify step — the user already passed the captcha to get the code).
+  const p = url.pathname;
+  const isAuthAction =
+    req.method === "POST" &&
+    (p.endsWith("/sign-in/email") ||
+      p.endsWith("/sign-up/email") ||
+      p.endsWith("/email-otp/send-verification-otp"));
+
+  if (isAuthAction && env.TURNSTILE_SECRET_KEY) {
+    try {
+      const body = (await req.clone().json()) as { turnstileToken?: string };
+      const token = body?.turnstileToken;
+      if (!token) {
+        return Response.json({ message: "Please complete the captcha verification." }, { status: 400 });
+      }
+      const verifyRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          secret: env.TURNSTILE_SECRET_KEY,
+          response: token,
+        }),
+      });
+      const verifyData = (await verifyRes.json()) as { success: boolean };
+      if (!verifyData.success) {
+        return Response.json({ message: "Captcha verification failed. Please try again." }, { status: 403 });
+      }
+    } catch (err) {
+      console.error("[turnstile] Verification error:", err);
+      return Response.json({ message: "Captcha verification error. Please try again." }, { status: 500 });
+    }
+  }
+
+  if (url.pathname === "/api/auth/callback/google") {
+    return handleGoogleCallback(req);
+  }
+  return auth.handler(req);
+}
+
 // ── WebSocket upgrade handler ────────────────────────────────────────
 // Bun.serve handles WS upgrades outside Hono. We intercept /ws/chat here
 // by using a custom fetch that tries the WS upgrade first.
 async function handleFetch(req: Request, server: import("bun").Server<WsData>): Promise<Response> {
   const url = new URL(req.url);
 
+  // PostHog analytics, proxied from our own domain (src/services/analytics.ts).
+  if (url.pathname === "/ingest" || url.pathname.startsWith("/ingest/")) {
+    return proxyIngest(req);
+  }
+
   // Better Auth — handle before Hono to avoid sub-router middleware conflicts
   if (url.pathname.startsWith("/api/auth/")) {
     console.log(`[auth] ${req.method} ${url.pathname}`);
-
-    // Turnstile verification for password sign-in/up and the OTP *send* step
-    // (not the OTP verify step — the user already passed the captcha to get the code).
-    const p = url.pathname;
-    const isAuthAction =
-      req.method === "POST" &&
-      (p.endsWith("/sign-in/email") ||
-        p.endsWith("/sign-up/email") ||
-        p.endsWith("/email-otp/send-verification-otp"));
-
-    if (isAuthAction && env.TURNSTILE_SECRET_KEY) {
-      try {
-        const body = (await req.clone().json()) as { turnstileToken?: string };
-        const token = body?.turnstileToken;
-        if (!token) {
-          return Response.json({ message: "Please complete the captcha verification." }, { status: 400 });
-        }
-        const verifyRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            secret: env.TURNSTILE_SECRET_KEY,
-            response: token,
-          }),
-        });
-        const verifyData = (await verifyRes.json()) as { success: boolean };
-        if (!verifyData.success) {
-          return Response.json({ message: "Captcha verification failed. Please try again." }, { status: 403 });
-        }
-      } catch (err) {
-        console.error("[turnstile] Verification error:", err);
-        return Response.json({ message: "Captcha verification error. Please try again." }, { status: 500 });
-      }
-    }
-
-    if (url.pathname === "/api/auth/callback/google") {
-      return handleGoogleCallback(req);
-    }
-    return auth.handler(req);
+    return trackAuthRequest(req, () => handleAuthRequest(req, url));
   }
 
   // LFG Desktop runners: device-token auth (no browser session), outbound from the laptop.
