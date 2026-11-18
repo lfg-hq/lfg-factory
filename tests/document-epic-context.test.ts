@@ -4,6 +4,7 @@ mock.module('../src/services/document-epic-context.ts', () => ({
  conversationEpic: async (project: string) => project === 'existing' ? 'existing-epic' : undefined,
  rememberPendingDocument: async (...args: any[]) => {pending.push(args);},
  linkPendingDocuments: async (...args: any[]) => {linked.push(args);},
+ isFeatureDocType: (t: unknown) => ['prd','tech_analysis','implementation','spec','design','design_language'].includes(String(t)),
 }));
 const {withConversationContext} = await import('../src/ai/tools/conversation-context.ts');
 test('new documents and previews inherit the active conversation epic', async () => {
@@ -23,6 +24,16 @@ test('documents before an epic are remembered; opening epic attaches pending doc
 test('epic created in this request supplies the context for subsequent documents',async()=>{
  let saved:any;
  const tools=withConversationContext({startEpic:{execute:async()=>({epicId:'created'})},streamDocumentContent:{execute:async(args:any)=>{saved=args;return {saved:true,id:'doc'};}}},'chat','actor');
- await tools.startEpic.execute({projectId:'new'},{});await tools.streamDocumentContent.execute({projectId:'new'},{});
+ await tools.startEpic.execute({projectId:'new'},{});await tools.streamDocumentContent.execute({projectId:'new',fileType:'prd'},{});
  expect(saved.epicId).toBe('created');
+});
+test('a case study written in a feature chat stays a project doc unless the agent links it',async()=>{
+ const saved:any[]=[]; const before=pending.length;
+ const tools=withConversationContext({startEpic:{execute:async()=>({epicId:'created'})},streamDocumentContent:{execute:async(args:any)=>{saved.push(args);return {saved:true,id:'case'};}}},'chat','actor');
+ await tools.streamDocumentContent.execute({projectId:'existing',fileType:'case_study'},{});
+ await tools.startEpic.execute({projectId:'existing'},{});
+ await tools.streamDocumentContent.execute({projectId:'existing',fileType:'other'},{});
+ await tools.streamDocumentContent.execute({projectId:'existing',fileType:'case_study',epicId:'chosen'},{});
+ expect(saved.map(a=>a.epicId)).toEqual([undefined,undefined,'chosen']);
+ expect(pending.length).toBe(before);
 });

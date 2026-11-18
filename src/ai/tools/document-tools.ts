@@ -46,9 +46,9 @@ export const streamDocumentContent = tool({
     "a document written in the wrong shape has to be rewritten. "  +
     "Write standalone product/technical content: decisions, rationale, requirements and open questions. Keep user commands, approval transcripts and agent execution instructions in chat, never in the document. Do not turn chat quotes into authorization. " +
     "If a file with the same name+type already exists it will be updated in-place. " +
-    "Pass `epicId` when the doc relates to a feature you're building — the doc is LINKED " +
-    "to that epic so the epic shows the full picture. The doc still lives in the project's " +
-    "Docs tab and stays readable and editable; linking never hides or moves it.",
+    "Pass `epicId` only for a feature's own requirements, technical analysis or design docs: the doc is LINKED " +
+    "to that epic so the epic shows the full picture. Case studies, overviews, research and other project-wide " +
+    "docs take no epicId, even when they describe a feature. Every doc lives in the project's Docs tab either way.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
@@ -59,8 +59,8 @@ export const streamDocumentContent = tool({
         .describe("Document type: prd | implementation | tech_analysis | design_language | spec | roadmap | design | research | other"),
       content: z.string().describe("Full document content in Markdown — written once, streamed live to the user"),
       epicId: z.string().optional().describe(
-        "The epic this doc relates to (from startEpic). Links the doc to that epic so the " +
-        "epic shows its docs alongside its tickets. The doc stays a normal project doc."
+        "Only for a feature's own requirements, technical analysis or design doc: the epic (from startEpic) it belongs to. " +
+        "Omit for case studies, overviews, research and other project-wide docs."
       ),
     })
   ),

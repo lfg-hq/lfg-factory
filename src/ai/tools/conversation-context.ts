@@ -15,8 +15,11 @@ export function withConversationContext(tools: Record<string, any>, conversation
       args = { ...args, ...(projectId && 'projectId' in args ? { projectId } : {}) };
       const isDoc = name === 'streamDocumentContent' || name === 'previewPage';
       const context = isDoc || name === 'startEpic' ? await import('../../services/document-epic-context.ts') : null;
-      const epicId = args.epicId || activeEpics.get(args.projectId) || (isDoc && args.projectId
-        ? await context!.conversationEpic(args.projectId, conversationId) : undefined);
+      // Only a feature's own docs follow the chat's epic by default; anything else is filed
+      // under an epic only when the agent passes one.
+      const inferEpic = !isDoc || (name === 'streamDocumentContent' ? context!.isFeatureDocType(args.fileType) : true);
+      const epicId = args.epicId || (inferEpic ? activeEpics.get(args.projectId) || (isDoc && args.projectId
+        ? await context!.conversationEpic(args.projectId, conversationId) : undefined) : undefined);
       const result = await tool.execute({ ...args, conversationId,
         ...(['sendTicketMessage','getTicketOperationStatus'].includes(name) ? {projectId,userId,turnId} : {}),
         ...(name === 'createTickets' ? {turnId} : {}),
@@ -24,7 +27,7 @@ export function withConversationContext(tools: Record<string, any>, conversation
         ...(isDoc && epicId ? {epicId} : {}),
       }, { ...(opts as object), designSourceRead: designSourcesRead.has(args.projectId) });
       if (name === 'readDesignSource' && result?.commit && result.files?.length && result.files.every((file: any) => typeof file.content === 'string' && file.content.trim())) designSourcesRead.add(args.projectId);
-      if (isDoc && result?.saved && result.id && !epicId) {
+      if (isDoc && inferEpic && result?.saved && result.id && !epicId) {
         await context!.rememberPendingDocument(args.projectId, conversationId, result.id);
       }
       if (name === 'startEpic' && result?.epicId) {
