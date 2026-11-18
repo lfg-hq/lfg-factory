@@ -27,6 +27,7 @@ import {
   LEGACY_ANCHOR_BRANCH,
 } from "../../services/epics.ts";
 import type { auth } from "../../auth/index.ts";
+import { isSameOrigin } from '../../utils/same-origin.ts';
 
 type AuthEnv = {
   Variables: {
@@ -338,8 +339,7 @@ epicsApi.post("/epics/:epicId/merge", async (c) => {
   const { epicId } = c.req.param();
 
   const correlationId = c.res.headers.get('X-Correlation-ID');
-  const origin = c.req.header('Origin');
-  if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: 'Use the same-origin Git confirmation screen.', code: 'ORIGIN_DENIED', correlationId }, 403);
+  if (!isSameOrigin(c)) return c.json({ error: 'Use the same-origin Git confirmation screen.', code: 'ORIGIN_DENIED', correlationId }, 403);
   const loaded = await loadEpic(epicId!, user.id);
   if (!loaded) return c.json({ error: 'Epic not found. Check project membership.', code: 'EPIC_NOT_FOUND', correlationId }, 404);
   if (!loaded.access.permissions.canEditFiles) return c.json({ error: 'Code-management permission is required.', code: 'CODE_PERMISSION_REQUIRED', correlationId }, 403);

@@ -236,3 +236,33 @@ export async function createReviewedPR(project: any, actorId: string, provider: 
   }
 }
 export async function priorReviews(projectId: string) { return db.select().from(gitReviews).where(eq(gitReviews.projectId, projectId)).orderBy(desc(gitReviews.createdAt)).limit(20); }
+
+// Direct PR creation without the AI review step. The user chose to skip the
+// review, so there is no saved review to bind to; duplicates are still
+// refused by checking the provider's open PRs, and an in-process lock stops a
+// double click from sending two creations for the same pair.
+const directCreations = new Set<string>();
+export async function createDirectPR(project: any, actorId: string, provider: GitProvider, input: { headRef?: unknown; baseRef?: unknown; title?: unknown; body?: unknown }, correlationId: string) {
+  const headRef = typeof input.headRef === 'string' ? input.headRef : '';
+  const baseRef = typeof input.baseRef === 'string' ? input.baseRef : '';
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  const body = typeof input.body === 'string' ? input.body : '';
+  if (!validRef(headRef) || !validRef(baseRef) || headRef === baseRef) throw new ReviewError('INVALID_REFS', 400);
+  if (!title || title.length > 250 || body.length > 40_000) throw new ReviewError('INVALID_PR_DETAILS', 400);
+  const key = `${project.id}\u0000${reviewRepository(provider)}\u0000${headRef}\u0000${baseRef}`;
+  if (directCreations.has(key)) throw new ReviewError('PR_CREATION_BUSY', 409);
+  directCreations.add(key);
+  try {
+    // Both refs must exist; provider.ref throws a typed error when one doesn't.
+    await Promise.all([provider.ref(headRef), provider.ref(baseRef)]);
+    const prs = await provider.pullRequests();
+    const existing = prs.items.find(p => p.sourceRepo?.toLowerCase() === provider.identity.toLowerCase() && p.source === headRef && p.destination === baseRef);
+    if (existing) return { pullRequest: existing, existing: true };
+    if (!prs.complete) throw new ReviewError('DUPLICATE_LOOKUP_INCOMPLETE', 502);
+    const result = await provider.createPullRequest(headRef, baseRef, title, body);
+    await logActivity({ projectId: project.id, actorType: 'user', activityType: 'git_pr_created', title: 'Pull request created (review skipped)', metadata: { actorId, correlationId, number: result.id, headRef, baseRef } });
+    return { pullRequest: result, existing: false };
+  } finally {
+    directCreations.delete(key);
+  }
+}
