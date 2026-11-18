@@ -62,7 +62,8 @@ export async function createTicketOperation(input:{ticketId:string;projectId:str
  }
  const id=operationId(input.ticketId,input.conversationId,input.turnId,input.message);
  const {getPreviewState}=await import('./dev-preview.ts');
- const preview=await getPreviewState(input.projectId).catch(()=>null);
+ const local=await import('./runner/preview-job.ts');
+ const preview=(await local.resolvePreviewWhere(input.userId)).where==='computer'?await local.localPreviewState(input.userId,input.projectId).catch(()=>null):await getPreviewState(input.projectId).catch(()=>null);
  const operation:TicketOperation={id,ticketId:input.ticketId,projectId:input.projectId,publicProjectId:project.projectId,conversationId:input.conversationId,userId:input.userId,selectedBranch:preview?.branch,requestHash,status:'queued',detail:'Repair or question queued for the ticket agent.',updatedAt:new Date().toISOString()};
  const inserted=await db.insert(ticketLogs).values({id,ticketId:input.ticketId,logType:'chat_operation',command:'Chat follow-up',output:JSON.stringify(operation)}).onConflictDoNothing().returning({id:ticketLogs.id});
  return {operation:(await readTicketOperation(id))!,created:inserted.length>0};
@@ -145,13 +146,17 @@ async function workRecap(ticketId:string,since:Date,title:string,fallback?:strin
 }
 async function finishPublishedOperation(op:TicketOperation,since=new Date(Date.parse(op.updatedAt))) {
  const {getPreviewState,restartPreview}=await import('./dev-preview.ts');
- const state=await getPreviewState(op.projectId).catch(()=>null);
+ const local=await import('./runner/preview-job.ts');
+ const onComputer=(await local.resolvePreviewWhere(op.userId)).where==='computer';
+ const state=onComputer?await local.localPreviewState(op.userId,op.projectId).catch(()=>null):await getPreviewState(op.projectId).catch(()=>null);
  const selected=state?.branch || '(default)';
  const publication=op.publication!;
  // Plain wording for the user; branch and commit stay in the ticket's own log and Git tab.
  let detail=`Merged into \`${publication.anchor}\`.`;
  if(state?.previewStatus==='running' && selected===op.selectedBranch && [publication.branch,publication.anchor].includes(selected)) {
-  const result=await restartPreview(op.projectId,{userId:op.userId,branch:selected,expectedBranch:selected,conversationId:op.conversationId}).catch(e=>({error:(e as Error).message}));
+  const result=onComputer
+   ?await local.startLocalPreview({projectId:op.projectId,userId:op.userId,refresh:true}).then(job=>local.waitForLocalPreview(job.id,10*60_000)).catch(e=>({error:(e as Error).message}))
+   :await restartPreview(op.projectId,{userId:op.userId,branch:selected,expectedBranch:selected,conversationId:op.conversationId}).catch(e=>({error:(e as Error).message}));
   detail+='error' in result ? ` The preview couldn't be refreshed: ${result.error}` : ` The preview is updated and running: ${result.previewUrl}. It hasn't been tested end to end.`;
  } else detail+=` The preview is showing another branch, so it wasn't refreshed. Switch it to \`${publication.anchor}\` to see this change.`;
  // Lead with what was built, as bullets; the publication facts follow.
