@@ -35,7 +35,7 @@ export function SharedTicketPage({ ticket, tasks, project }: SharedTicketPagePro
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
   <script src="/public/js/marked.min.js"></script>

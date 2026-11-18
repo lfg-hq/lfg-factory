@@ -78,7 +78,7 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
   <style>

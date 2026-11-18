@@ -50,7 +50,7 @@ export function ChatPage({
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <style>
     /* "Chat with ticket" log entries */
