@@ -132,19 +132,26 @@ function showWorkspace(path = "/projects") {
  * On macOS the first use asks the system for microphone access, so the user sees the
  * normal "LFG would like to access the microphone" prompt instead of a silent failure.
  */
+const isLocal = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
+
 function allowMicrophoneForServer() {
   const fromServer = (url: string) => !!config.serverUrl && (url === origin() || url.startsWith(origin() + "/"));
   const audioOnly = (details: { mediaTypes?: string[] }) => (details.mediaTypes ?? ["audio"]).every((t) => t === "audio");
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
     const url = details.requestingUrl ?? wc.getURL();
+    // Previews on this computer: an LFG page showing the app at http://localhost:<port> needs
+    // Chromium's local-network permission. The request can name the frame (localhost), so judge
+    // it by the page the frame sits in.
+    if (/local-network|private-network/i.test(permission)) { callback(fromServer(wc.getURL()) || fromServer(url)); return; }
     // Anything else keeps Electron's default for LFG's own pages; other sites get nothing.
     if (permission !== "media") { callback(fromServer(url)); return; }
     if (!fromServer(url) || !audioOnly(details as { mediaTypes?: string[] })) { callback(false); return; }
     if (process.platform !== "darwin" || systemPreferences.getMediaAccessStatus("microphone") === "granted") { callback(true); return; }
     systemPreferences.askForMediaAccess("microphone").then(callback, () => callback(false));
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
-    permission !== "media" || fromServer(requestingOrigin));
+  session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
+    /local-network|private-network/i.test(permission) ? fromServer(wc?.getURL() ?? "") || fromServer(requestingOrigin) || isLocal(requestingOrigin)
+      : permission !== "media" || fromServer(requestingOrigin));
 }
 
 /** Mark requests to the LFG server as coming from the app, so it skips the marketing site. */

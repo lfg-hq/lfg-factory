@@ -122,6 +122,8 @@ export interface PreviewPayload {
   plan: PreviewPlan | null;
   /** The project's environment variables (the person can already read them on the Env tab). */
   env: Record<string, string>;
+  /** The cloud preview's own addresses (https origins). Env values pointing at them mean "this app" and are pointed at localhost here. */
+  cloudOrigins?: string[];
 }
 
 export type PreviewPhase = "detecting" | "provisioning" | "installing" | "seeding" | "starting" | "running" | "error" | "stopped";

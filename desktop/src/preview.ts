@@ -14,8 +14,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import os from "node:os";
 import { join } from "node:path";
@@ -146,7 +146,7 @@ export function localizeCommand(cmd: string, dir: string): string {
 
 // ── One running preview ──────────────────────────────────────────────
 
-interface Meta { branch: string | null; installedCommit?: string; installedNode?: string; seeded?: string[] }
+interface Meta { branch: string | null; installedCommit?: string; installedNode?: string; seeded?: string[]; secrets?: Record<string, string> }
 
 export class PreviewStopped extends Error { constructor() { super("Stopped"); } }
 
@@ -288,6 +288,22 @@ export class LocalPreview {
 
     // 2. Databases.
     const appEnv: NodeJS.ProcessEnv = { ...env, ...p.env, HOST: "127.0.0.1" };
+    // Env values written for the cloud preview: its own address means this app, here on localhost.
+    const services = [{ name: "web", port: plan.port }, ...(plan.services ?? []).map(s => ({ name: s.name, port: s.port }))];
+    for (const change of localizeEnv(p.env, p.cloudOrigins ?? [], services)) {
+      appEnv[change.key] = change.value;
+      this.log(`${change.key}: pointed at the cloud preview; using ${change.local} on this computer.`);
+    }
+    // Secrets the app reads (session/JWT/auth signing keys) that nobody set: make one for this
+    // computer and keep it, so sign-ins survive a restart.
+    const missing = secretsTheAppReads(this.dir).filter(k => !appEnv[k]);
+    if (missing.length) {
+      const saved = { ...(this.readMeta()?.secrets ?? {}) };
+      for (const k of missing) saved[k] ??= randomBytes(32).toString("base64url");
+      for (const k of missing) appEnv[k] = saved[k];
+      this.writeMeta({ ...(this.readMeta() ?? { branch: p.branch }), secrets: saved });
+      this.log(`Made ${missing.join(", ")} for this computer's preview (not set in the project's Env).`);
+    }
     if (plan.databases.length) {
       await this.step("databases", "Start the databases it needs", "provisioning", async () => {
         for (const d of plan.databases) {
@@ -524,6 +540,60 @@ export class LocalPreview {
     for (let i = 0; i < 50 && children.some(c => !gone(c)); i++) await sleep(100);
     for (const c of children) if (!gone(c)) killGroup(c, "SIGKILL");
   }
+}
+
+/**
+ * Env values that point at the cloud preview (its exact origins, or LFG's preview domain)
+ * → the same path on this computer's localhost. "preview-x-api.app.lfg.run" maps to the
+ * service named "api" when there is one.
+ */
+export function localizeEnv(env: Record<string, string>, cloudOrigins: string[], services: Array<{ name: string; port: number }>): Array<{ key: string; value: string; local: string }> {
+  const hosts = new Set(cloudOrigins.map(o => { try { return new URL(o).host; } catch { return ""; } }).filter(Boolean));
+  const primary = services[0]?.port;
+  if (!primary) return [];
+  const out: Array<{ key: string; value: string; local: string }> = [];
+  for (const [key, value] of Object.entries(env)) {
+    let local = "";
+    const next = value.replace(/https?:\/\/([a-z0-9.-]+)(?::\d+)?/gi, (match, host: string) => {
+      const ours = hosts.has(host) || /\.(app\.lfg\.run|apps\.mags\.run)$/i.test(host);
+      if (!ours) return match;
+      const svc = services.slice(1).find(s => host.toLowerCase().split(".")[0]!.endsWith(`-${s.name.toLowerCase()}`));
+      local = `http://localhost:${svc?.port ?? primary}`;
+      return local;
+    });
+    if (next !== value) out.push({ key, value: next, local });
+  }
+  return out;
+}
+
+// Names of signing/session secrets an app can safely be given a random value for. Credentials
+// for outside services (Stripe, OAuth client secrets, API keys…) are never invented.
+const LOCAL_SECRET = /(^|_)(AUTH_SECRET|SECRET_KEY|SESSION_SECRET|SESSION_KEY|JWT_SECRET|JWT_KEY|COOKIE_SECRET|SIGNING_KEY|SIGNING_SECRET|ENCRYPTION_KEY|APP_KEY|APP_SECRET|NEXTAUTH_SECRET|TOKEN_SECRET|CSRF_SECRET)$/;
+const OUTSIDE_SERVICE = /(CLIENT_SECRET|API_KEY|APIKEY|ACCESS_KEY|STRIPE|OPENAI|ANTHROPIC|TWILIO|EXOTEL|AWS|GOOGLE|GITHUB|SENDGRID|RESEND|SMTP|WEBHOOK|SUPABASE|CLERK)/;
+
+/** Secret-looking variables the app's own code reads (process.env.X, os.environ["X"], ENV["X"]). */
+export function secretsTheAppReads(dir: string): string[] {
+  const found = new Set<string>();
+  const patterns = [/process\.env\.([A-Z][A-Z0-9_]*)/g, /process\.env\[["']([A-Z][A-Z0-9_]*)["']\]/g, /import\.meta\.env\.([A-Z][A-Z0-9_]*)/g,
+    /os\.environ(?:\.get)?[\[(]\s*["']([A-Z][A-Z0-9_]*)["']/g, /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g, /ENV(?:\.fetch)?[\[(]\s*["']([A-Z][A-Z0-9_]*)["']/g];
+  let files = 0;
+  const walk = (d: string, depth: number) => {
+    if (depth > 8 || files > 4000) return;
+    let names: string[] = [];
+    try { names = readdirSync(d); } catch { return; }
+    for (const n of names) {
+      if (n.startsWith(".") || n === "node_modules" || n === "dist" || n === "build" || n === "vendor" || n === "venv" || n === "__pycache__") continue;
+      const full = join(d, n);
+      let st; try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!/\.(m?[jt]sx?|cjs|py|rb)$/.test(n) || st.size > 400_000) continue;
+      files++;
+      let text = ""; try { text = readFileSync(full, "utf8"); } catch { continue; }
+      for (const re of patterns) for (const m of text.matchAll(re)) found.add(m[1]!);
+    }
+  };
+  walk(dir, 0);
+  return [...found].filter(k => LOCAL_SECRET.test(k) && !OUTSIDE_SERVICE.test(k)).sort();
 }
 
 /** Docker on this computer: running, installed but stopped, or not installed. */

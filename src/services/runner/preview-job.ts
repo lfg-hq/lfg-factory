@@ -188,6 +188,14 @@ export function planFromManifest(raw: string | null | undefined): PreviewPlan | 
 
 const RESERVED_ENV = new Set(["PATH", "HOME", "USER", "SHELL", "PWD", "TMPDIR", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"]);
 
+/** The cloud preview's addresses, so the computer can point Env values that name them at localhost. */
+function cloudOrigins(appUrl: string | null | undefined, alias: string | null | undefined): string[] {
+  const out = new Set<string>();
+  try { if (appUrl) out.add(new URL(appUrl).origin); } catch { /* not a URL */ }
+  if (alias) out.add(`https://${alias}.${process.env.MAGS_APP_DOMAIN || "app.lfg.run"}`);
+  return [...out];
+}
+
 async function projectEnv(projectId: string): Promise<Record<string, string>> {
   const rows = await db.select().from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
   const out: Record<string, string> = {};
@@ -239,7 +247,8 @@ export async function startLocalPreview(input: {
   const label = input.label ?? (input.branch !== undefined ? (branch ?? "Default branch") : (prevPayload?.label ?? "Default branch"));
   await stopActive(input.userId, project.id);
 
-  const [env] = await db.select({ manifest: projectEnvironments.setupManifest }).from(projectEnvironments).where(eq(projectEnvironments.projectId, project.id)).limit(1);
+  const [env] = await db.select({ manifest: projectEnvironments.setupManifest, appUrl: projectEnvironments.appUrl, alias: projectEnvironments.stableAlias })
+    .from(projectEnvironments).where(eq(projectEnvironments.projectId, project.id)).limit(1);
   const payload: PreviewPayload = {
     protocol: RUNNER_PROTOCOL_VERSION,
     projectId: project.projectId ?? project.id,
@@ -250,6 +259,7 @@ export async function startLocalPreview(input: {
     refresh: input.refresh,
     plan: planFromManifest(env?.manifest),
     env: await projectEnv(project.id),
+    cloudOrigins: cloudOrigins(env?.appUrl, env?.alias),
   };
   const job = await enqueueJob({ userId: input.userId, projectId: project.id, ticketId: null, type: "preview", payload });
   const state = fresh();
