@@ -789,6 +789,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentConversationId = data.conversationId;
                 window.currentConversationId = currentConversationId;
                 window.dispatchEvent(new Event('chat-conversation-changed'));
+                // Show the new chat in the sidebar now, not when the agent's turn ends.
+                loadConversations();
                 return;
             }
             if (data.type === 'message_rejected') {

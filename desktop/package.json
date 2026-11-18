@@ -43,7 +43,13 @@
         "dmg",
         "zip"
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "LFG uses the microphone when you dictate a message or talk to the agent."
+      }
     },
     "win": {
       "target": [

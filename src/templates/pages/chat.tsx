@@ -582,7 +582,7 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261118-docs-fast"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
@@ -600,7 +600,7 @@ export function ChatPage({
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261117-runner-status"></script>
+  <script src="/public/js/chat.js?v=20261118-new-chat-list"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

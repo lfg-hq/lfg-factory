@@ -7037,11 +7037,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Function to fetch and display files
             const fetchFiles = (page = 1) => {
-                // Show loading state
-                fileBrowserLoading.style.display = 'block';
-                fileBrowserEmpty.style.display = 'none';
-                fileBrowserList.style.display = 'none';
-                fileBrowserPagination.style.display = 'none';
+                // Keep the list on screen while it refreshes; the spinner is only for the
+                // first load, so reopening the tab no longer blanks it for a moment.
+                if (!fileBrowserList.children.length) {
+                    fileBrowserLoading.style.display = 'block';
+                    fileBrowserEmpty.style.display = 'none';
+                    fileBrowserList.style.display = 'none';
+                    fileBrowserPagination.style.display = 'none';
+                }
                 
                 const params = new URLSearchParams({
                     page: page,

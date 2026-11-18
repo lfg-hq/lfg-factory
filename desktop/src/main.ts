@@ -10,7 +10,7 @@
  * safeStorage), this computer's device id, and the "don't ask again" project list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -122,6 +122,26 @@ function showWorkspace(path = "/projects") {
   void win.loadURL(`${origin()}${path}`);
   win.show();
   win.focus();
+}
+
+/**
+ * Let the LFG server's pages use the microphone (dictation, voice mode), never the camera or other sites.
+ * On macOS the first use asks the system for microphone access, so the user sees the
+ * normal "LFG would like to access the microphone" prompt instead of a silent failure.
+ */
+function allowMicrophoneForServer() {
+  const fromServer = (url: string) => !!config.serverUrl && (url === origin() || url.startsWith(origin() + "/"));
+  const audioOnly = (details: { mediaTypes?: string[] }) => (details.mediaTypes ?? ["audio"]).every((t) => t === "audio");
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const url = details.requestingUrl ?? wc.getURL();
+    // Anything else keeps Electron's default for LFG's own pages; other sites get nothing.
+    if (permission !== "media") { callback(fromServer(url)); return; }
+    if (!fromServer(url) || !audioOnly(details as { mediaTypes?: string[] })) { callback(false); return; }
+    if (process.platform !== "darwin" || systemPreferences.getMediaAccessStatus("microphone") === "granted") { callback(true); return; }
+    systemPreferences.askForMediaAccess("microphone").then(callback, () => callback(false));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
+    permission !== "media" || fromServer(requestingOrigin));
 }
 
 /** Mark requests to the LFG server as coming from the app, so it skips the marketing site. */
@@ -294,6 +314,7 @@ if (!app.requestSingleInstanceLock()) {
     if (config.serverUrl && config.serverUrl !== SERVER_URL) config = { trustedProjects: config.trustedProjects };
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
     tagServerRequests();
+    allowMicrophoneForServer();
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();
