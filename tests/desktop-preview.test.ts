@@ -120,7 +120,7 @@ test("a database the computer doesn't have is explained, not a silent failure", 
   const git = sh(["which", "git"]);
   const run = start(payload({ plan: { runCmd: "node server.cjs", port: await freePort(), databases: [{ engine: "mssql", connectionEnvVar: "ConnectionStrings__Default", connectionFormat: "dotnet-sqlserver" }] } }),
     { ...process.env, PATH: `${dirname(git)}:/bin` }); // no Docker on this PATH
-  await expect(run.preview.start()).rejects.toThrow("This app needs SQL Server, and this computer has neither SQL Server running nor Docker");
+  await expect(run.preview.start()).rejects.toThrow(/This app needs SQL Server(, and this computer has neither SQL Server running nor Docker|\. Start Docker Desktop)/);
 });
 
 test("the runner asks first, runs the preview alongside builds, and stops it on cancel", async () => {

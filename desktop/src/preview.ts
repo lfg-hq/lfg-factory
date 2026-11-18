@@ -31,6 +31,8 @@ export interface PreviewContext {
   allowLocalRepos?: boolean;
   /** How long to wait for an app to answer on its port. Default 5 minutes. */
   startTimeoutMs?: number;
+  /** Docker Desktop is installed but not running: ask the person to start it. Absent: don't ask. */
+  askStartDocker?(info: { engine: string }): Promise<boolean>;
   /** Ask the person before downloading a Node.js the project needs. Absent: never download. */
   approveNodeDownload?(info: { version: string; reason: string; folder: string }): Promise<boolean>;
 }
@@ -66,11 +68,13 @@ export const previewFolderName = (projectId: string) => projectId.replace(/[^A-Z
 // ── Databases ────────────────────────────────────────────────────────
 
 type Engine = PreviewPlan["databases"][number]["engine"];
-const ENGINES: Record<Engine, { label: string; port: number; image: string; volume: string; dockerEnv: string[]; install: string }> = {
-  postgres: { label: "Postgres", port: 5432, image: "postgres:16-alpine", volume: "/var/lib/postgresql/data", dockerEnv: ["POSTGRES_PASSWORD=lfg"], install: "brew install postgresql@16 && brew services start postgresql@16" },
-  mysql: { label: "MySQL", port: 3306, image: "mysql:8.4", volume: "/var/lib/mysql", dockerEnv: ["MYSQL_ROOT_PASSWORD=lfg"], install: "brew install mysql && brew services start mysql" },
-  redis: { label: "Redis", port: 6379, image: "redis:7-alpine", volume: "/data", dockerEnv: [], install: "brew install redis && brew services start redis" },
-  mssql: { label: "SQL Server", port: 1433, image: "mcr.microsoft.com/mssql/server:2022-latest", volume: "/var/opt/mssql", dockerEnv: ["ACCEPT_EULA=Y", "MSSQL_SA_PASSWORD=Lfg-preview-1"], install: "Docker Desktop (SQL Server runs in Docker on a Mac)" },
+// `port` is the engine's usual port (a server already running here); `dockerPort` is where LFG's
+// own container listens, so it never collides with a database the person already runs.
+const ENGINES: Record<Engine, { label: string; port: number; dockerPort: number; image: string; volume: string; dockerEnv: string[]; install: string }> = {
+  postgres: { label: "Postgres", port: 5432, dockerPort: 55432, image: "postgres:16-alpine", volume: "/var/lib/postgresql/data", dockerEnv: ["POSTGRES_PASSWORD=lfg"], install: "brew install postgresql@16 && brew services start postgresql@16" },
+  mysql: { label: "MySQL", port: 3306, dockerPort: 53306, image: "mysql:8.4", volume: "/var/lib/mysql", dockerEnv: ["MYSQL_ROOT_PASSWORD=lfg"], install: "brew install mysql && brew services start mysql" },
+  redis: { label: "Redis", port: 6379, dockerPort: 56379, image: "redis:7-alpine", volume: "/data", dockerEnv: [], install: "brew install redis && brew services start redis" },
+  mssql: { label: "SQL Server", port: 1433, dockerPort: 51433, image: "mcr.microsoft.com/mssql/server:2022-latest", volume: "/var/opt/mssql", dockerEnv: ["ACCEPT_EULA=Y", "MSSQL_SA_PASSWORD=Lfg-preview-1"], install: "Docker Desktop (SQL Server runs in Docker on a Mac)" },
 };
 
 export interface DbEndpoint { engine: Engine; host: string; port: number; user: string; password: string; database: string }
@@ -287,7 +291,9 @@ export class LocalPreview {
     if (plan.databases.length) {
       await this.step("databases", "Start the databases it needs", "provisioning", async () => {
         for (const d of plan.databases) {
-          if (p.env[d.connectionEnvVar]) { this.log(`${d.connectionEnvVar}: using the value from the project's Env settings.`); continue; }
+          const configured = p.env[d.connectionEnvVar];
+          if (configured && !pointsAtThisMachine(configured)) { this.log(`${d.connectionEnvVar}: using the value from the project's Env settings.`); continue; }
+          if (configured) this.log(`${d.connectionEnvVar} in the project's Env settings points at the cloud preview's own database (localhost), so LFG makes one on this computer instead.`);
           const endpoint = await this.database(d.engine, d.databaseName || p.projectName, env);
           appEnv[d.connectionEnvVar] = formatConnection(d.connectionFormat, endpoint);
           this.log(`${d.connectionEnvVar} → ${ENGINES[d.engine].label} on ${endpoint.host}:${endpoint.port}, database "${endpoint.database}".`);
@@ -400,39 +406,63 @@ export class LocalPreview {
   private async database(engine: Engine, name: string, env: NodeJS.ProcessEnv): Promise<DbEndpoint> {
     const e = ENGINES[engine];
     const database = name.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^([^a-z_])/, "_$1").slice(0, 50) || "app";
-    const user = os.userInfo().username;
-    if (await portOpen(e.port)) {
-      this.log(`${e.label} is already running on this computer (port ${e.port}).`);
-      if (engine === "postgres") {
-        const made = await run("createdb", ["-h", "127.0.0.1", "-p", String(e.port), database], { env }).catch(() => null);
-        if (made && made.code !== 0 && !/already exists/.test(made.stderr)) this.log(`Couldn't create database "${database}" (${made.stderr.trim().slice(0, 200)}); the app may create it.`);
-      }
-      return { engine, host: "127.0.0.1", port: e.port, user: engine === "mysql" ? "root" : engine === "mssql" ? "sa" : user, password: "", database };
+    // 1. Docker (its own container, its own port): nothing of the person's own databases is touched.
+    let docker = await dockerState(env);
+    if (docker === "running") return this.dockerDatabase(engine, database, env);
+    // 2. A server for this engine already running here.
+    if (await portOpen(e.port)) return this.localDatabase(engine, database, env);
+    // 3. Docker is installed but not running: ask to start it.
+    if (docker === "stopped") {
+      const ok = this.ctx.askStartDocker ? await this.ctx.askStartDocker({ engine: e.label }) : false;
+      if (!ok) throw new Error(`This app needs ${e.label}. Start Docker Desktop (LFG runs ${e.label} in it), then press Update & rebuild. Or run this preview in the cloud.`);
+      this.log("Starting Docker Desktop…");
+      await run("open", ["-a", "Docker"], { env }).catch(() => null);
+      for (let i = 0; i < 120 && docker !== "running"; i++) { this.check(); await sleep(2000); docker = await dockerState(env); }
+      if (docker !== "running") throw new Error("Docker Desktop didn't finish starting. Once its whale icon stops animating, press Update & rebuild.");
+      return this.dockerDatabase(engine, database, env);
     }
-    const docker = await run("docker", ["info", "--format", "{{.ServerVersion}}"], { env, timeoutMs: 20_000 }).catch(() => null);
-    if (!docker || docker.code !== 0) {
-      throw new Error(`This app needs ${e.label}, and this computer has neither ${e.label} running nor Docker. ` +
-        `Install it (${e.install}), then press Update & rebuild. Or run this preview in the cloud.`);
+    throw new Error(`This app needs ${e.label}, and this computer has neither ${e.label} running nor Docker. ` +
+      `Install Docker Desktop (LFG then runs ${e.label} in it) or ${e.label} itself (${e.install}), then press Update & rebuild. Or run this preview in the cloud.`);
+  }
+
+  /** Use a database server already running on this computer, as the person's own user. */
+  private async localDatabase(engine: Engine, database: string, env: NodeJS.ProcessEnv): Promise<DbEndpoint> {
+    const e = ENGINES[engine];
+    this.log(`${e.label} is already running on this computer (port ${e.port}); using database "${database}" there.`);
+    if (engine === "postgres") {
+      const made = await run("createdb", ["-h", "127.0.0.1", "-p", String(e.port), database], { env }).catch(() => null);
+      if (made && made.code !== 0 && !/already exists/.test(made.stderr)) this.log(`Couldn't create database "${database}" (${made.stderr.trim().slice(0, 200)}); the app may create it.`);
     }
-    const container = `lfg-preview-${engine}`;
+    return { engine, host: "127.0.0.1", port: e.port, user: engine === "mysql" ? "root" : engine === "mssql" ? "sa" : os.userInfo().username, password: "", database };
+  }
+
+  /** LFG's own container for this engine (one per engine, shared by projects, one database each). */
+  private async dockerDatabase(engine: Engine, database: string, env: NodeJS.ProcessEnv): Promise<DbEndpoint> {
+    const e = ENGINES[engine];
+    const port = e.dockerPort;
+    const container = `lfg-db-${engine}`;
     const state = await run("docker", ["inspect", "-f", "{{.State.Running}}", container], { env });
     if (state.code !== 0) {
-      this.log(`Starting ${e.label} in Docker (${e.image})…`);
-      await mustRun("docker", ["run", "-d", "--name", container, "-p", `127.0.0.1:${e.port}:${e.port}`, "-v", `${container}-data:${e.volume}`,
+      this.log(`Starting ${e.label} in Docker (${e.image}, port ${port})…`);
+      await mustRun("docker", ["run", "-d", "--name", container, "--restart", "unless-stopped", "-p", `127.0.0.1:${port}:${e.port}`, "-v", `${container}-data:${e.volume}`,
         ...e.dockerEnv.flatMap(v => ["-e", v]), e.image], { env, timeoutMs: 15 * 60_000 }, `Starting ${e.label} in Docker`);
     } else if (state.stdout.trim() !== "true") {
+      this.log(`Starting LFG's ${e.label} container…`);
       await mustRun("docker", ["start", container], { env }, `Starting ${e.label} in Docker`);
+    } else {
+      this.log(`${e.label} is running in Docker (port ${port}).`);
     }
-    for (let i = 0; i < 90 && !(await portOpen(e.port)); i++) { this.check(); await sleep(1000); }
-    if (!(await portOpen(e.port))) throw new Error(`${e.label} started in Docker but isn't answering on port ${e.port}. Check Docker Desktop, then press Update & rebuild.`);
+    for (let i = 0; i < 90 && !(await portOpen(port)); i++) { this.check(); await sleep(1000); }
+    if (!(await portOpen(port))) throw new Error(`${e.label} started in Docker but isn't answering on port ${port}. Check Docker Desktop, then press Update & rebuild.`);
     if (engine === "postgres") {
-      for (let i = 0; i < 30; i++) { if ((await run("docker", ["exec", container, "pg_isready", "-U", "postgres"], { env })).code === 0) break; await sleep(1000); }
-      await run("docker", ["exec", container, "createdb", "-U", "postgres", database], { env });
+      for (let i = 0; i < 30; i++) { if ((await run("docker", ["exec", container, "pg_isready", "-U", "postgres"], { env })).code === 0) break; this.check(); await sleep(1000); }
+      const made = await run("docker", ["exec", container, "createdb", "-U", "postgres", database], { env });
+      if (made.code === 0) this.log(`Created database "${database}".`);
     } else if (engine === "mysql") {
-      for (let i = 0; i < 60; i++) { if ((await run("docker", ["exec", container, "mysql", "-uroot", "-plfg", "-e", `CREATE DATABASE IF NOT EXISTS \`${database}\``], { env })).code === 0) break; await sleep(2000); }
+      for (let i = 0; i < 60; i++) { if ((await run("docker", ["exec", container, "mysql", "-uroot", "-plfg", "-e", `CREATE DATABASE IF NOT EXISTS \`${database}\``], { env })).code === 0) break; this.check(); await sleep(2000); }
     }
     const password = engine === "postgres" || engine === "mysql" ? "lfg" : engine === "mssql" ? "Lfg-preview-1" : "";
-    return { engine, host: "127.0.0.1", port: e.port, user: engine === "postgres" ? "postgres" : engine === "mysql" ? "root" : engine === "mssql" ? "sa" : "", password, database };
+    return { engine, host: "127.0.0.1", port, user: engine === "postgres" ? "postgres" : engine === "mysql" ? "root" : engine === "mssql" ? "sa" : "", password, database };
   }
 
   /** Start one app and wait until it answers. Returns its address. */
@@ -494,6 +524,25 @@ export class LocalPreview {
     for (let i = 0; i < 50 && children.some(c => !gone(c)); i++) await sleep(100);
     for (const c of children) if (!gone(c)) killGroup(c, "SIGKILL");
   }
+}
+
+/** Docker on this computer: running, installed but stopped, or not installed. */
+async function dockerState(env: NodeJS.ProcessEnv): Promise<"running" | "stopped" | "missing"> {
+  const info = await run("docker", ["info", "--format", "{{.ServerVersion}}"], { env, timeoutMs: 20_000 }).catch(() => null);
+  if (info && info.code === 0 && info.stdout.trim()) return "running";
+  if (info || existsSync("/Applications/Docker.app") || existsSync(join(os.homedir(), "Applications/Docker.app"))) return "stopped";
+  return "missing";
+}
+
+/**
+ * A connection setting that points at this same machine (localhost, 127.0.0.1, ::1, 0.0.0.0).
+ * In the project's Env settings, that's the cloud preview's own database, not one here.
+ */
+export function pointsAtThisMachine(value: string): boolean {
+  const host = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^:/?#;]+)/i.exec(value.trim())?.[1]
+    ?? /(?:^|;)\s*(?:host|server|data source)\s*=\s*([^;,\s]+)/i.exec(value)?.[1]
+    ?? /(?:^|\s)host=(\S+)/.exec(value)?.[1];
+  return !!host && /^(localhost|127(?:\.\d+){3}|\[?::1\]?|0\.0\.0\.0|host\.docker\.internal)$/i.test(host.trim());
 }
 
 function killGroup(child: ChildProcess, signal: NodeJS.Signals) {

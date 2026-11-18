@@ -268,6 +268,19 @@ async function approvePreview(job: PreviewJobOffer, commands: string[]) {
   return { approved: true as const };
 }
 
+/** A preview needs a database and Docker Desktop is installed but not running: ask to start it. */
+async function askStartDocker(info: { projectName: string; engine: string }) {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Start Docker Desktop", "Not now"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `${info.projectName} needs ${info.engine}`,
+    detail: `LFG runs ${info.engine} for previews in Docker, in its own container, so your own databases aren't touched. Docker Desktop is installed but not running.\n\nLFG Desktop will open Docker Desktop and continue once it's ready.`,
+  });
+  return response === 0;
+}
+
 /** A preview needs a Node.js this computer doesn't have: ask before downloading it from nodejs.org. */
 async function approveNodeDownload(info: { projectName: string; version: string; reason: string; folder: string }) {
   const { response } = await dialog.showMessageBox({
@@ -300,6 +313,7 @@ function startRunner() {
     approve,
     approvePreview,
     approveNodeDownload,
+    askStartDocker,
     onState: (state, detail) => {
       runnerStatus = { state, detail };
       refreshTray();

@@ -56,6 +56,8 @@ export interface RunnerOptions {
   approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Ask the person whether to run this app's commands for a preview. Absent: previews are declined. */
   approvePreview?(job: PreviewJobOffer, commands: string[]): Promise<ApprovalResult>;
+  /** Docker Desktop is installed but stopped and a preview needs a database: ask to start it. */
+  askStartDocker?(info: { projectName: string; engine: string }): Promise<boolean>;
   /** Ask before downloading a Node.js a preview needs. */
   approveNodeDownload?(info: { projectName: string; version: string; reason: string; folder: string }): Promise<boolean>;
   /** How long a preview's app gets to answer on its port. */
@@ -354,6 +356,7 @@ export class Runner {
       env: this.opts.env ?? process.env,
       allowLocalRepos: this.opts.allowLocalRepos,
       startTimeoutMs: this.opts.previewStartTimeoutMs,
+      askStartDocker: this.opts.askStartDocker ? info => this.opts.askStartDocker!({ ...info, projectName: p.projectName }) : undefined,
       approveNodeDownload: this.opts.approveNodeDownload ? info => this.opts.approveNodeDownload!({ ...info, projectName: p.projectName }) : undefined,
       update: update => this.send({ type: "job.preview", jobId: job.id, update }),
     });

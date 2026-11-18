@@ -74,3 +74,15 @@ test("a download is the newest LTS that fits", async () => {
   expect(await chooseDownload([{ range: ">=20.9.0", source: "next" }], fake)).toEqual([24, 11, 1]);
   expect(await chooseDownload([{ range: "22", source: ".nvmrc" }], fake)).toEqual([22, 21, 0]);
 });
+
+test("a database setting for the cloud preview's own database isn't used on the computer", async () => {
+  const { pointsAtThisMachine } = await import("../desktop/src/preview.ts");
+  expect(pointsAtThisMachine("postgresql://app:secret@127.0.0.1:5432/app")).toBe(true);
+  expect(pointsAtThisMachine("postgres://localhost/app")).toBe(true);
+  expect(pointsAtThisMachine("mysql://root@[::1]:3306/x")).toBe(true);
+  expect(pointsAtThisMachine("Host=localhost;Port=5432;Database=x")).toBe(true);
+  expect(pointsAtThisMachine("host=127.0.0.1 port=5432 dbname=x")).toBe(true);
+  expect(pointsAtThisMachine("postgresql://u:p@db.example.com:5432/app")).toBe(false);
+  expect(pointsAtThisMachine("postgresql://u:p@ep-cool-1.neon.tech/app?sslmode=require")).toBe(false);
+  expect(pointsAtThisMachine("redis://my-redis.upstash.io:6379")).toBe(false);
+});
