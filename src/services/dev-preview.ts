@@ -1,5 +1,5 @@
 import {assertPreviewBranch,previewCheckoutDir,refreshPreviewCheckout,runtimeFingerprintCommand,cleanPreviewBuildCommand,cachedInstallCommand} from './preview-checkout.ts';
-import { backgroundProcessSchema, discoverBackgroundProcesses, previewWorkerCommand } from "./preview-workers.ts";
+import { backgroundProcessSchema, discoverBackgroundProcesses, previewWorkerCommand, workersNotRunAsServices } from "./preview-workers.ts";
 import { compilePreviewInspection } from './preview-inspection-command.ts';
 import {DEVELOPMENT_ACCESS_INSTRUCTION} from '../ai/prompts/development-access.ts';
 import { ensureManagedDatabaseWithRecovery } from "./managed-database-recovery.ts";
@@ -1400,7 +1400,7 @@ async function resolvePreviewWorkers(projectId:string,workspaceId:string,manifes
   workerHealthCache.delete(projectId);
   const result=await sh(workspaceId,`cat ${shellQuote(dir+'/package.json')} 2>/dev/null`,15000);
   let pkg:{}={};if(result.exitCode===0){try{pkg=JSON.parse(result.output);}catch{throw new Error('Cannot read package.json to identify required background processes');}}
-  manifest.backgroundProcesses=discoverBackgroundProcesses(pkg,manifest.backgroundProcesses);
+  manifest.backgroundProcesses=workersNotRunAsServices(discoverBackgroundProcesses(pkg,manifest.backgroundProcesses),manifest.services);
   // Record literal startup readiness from the actual entrypoint when available.
   for(const worker of manifest.backgroundProcesses){
     if(worker.entrypoint && !worker.readyLog){
@@ -3034,12 +3034,13 @@ export async function getPreviewState(projectId: string) {
     url: s.primary ? (row.appUrl ?? "") : ((!!s.primary || !!s.enabled) ? companionUrl(s.name) : ""),
   }));
   let workerError:string|null=null;
-  if(row.previewStatus==='running' && manifest?.backgroundProcesses?.length){
+  const healthWorkers=workersNotRunAsServices(manifest?.backgroundProcesses,manifest?.services);
+  if(row.previewStatus==='running' && healthWorkers.length){
     let health=workerHealthCache.get(projectId);
     if(!health || Date.now()-health.at>10000){
       try{
         const workspaceId=await envWorkspaceId(projectId);const {dir}=await resolvePreviewWorkDir(projectId,workspaceId);
-        const result=await sh(workspaceId,previewWorkerCommand('status',dir,manifest.backgroundProcesses,manifest.databases.map(d=>d.connectionEnvVar)),15000);
+        const result=await sh(workspaceId,previewWorkerCommand('status',dir,healthWorkers,manifest!.databases.map(d=>d.connectionEnvVar)),15000);
         const data=JSON.parse(result.output);
         health={at:Date.now(),error:result.exitCode===0 && data.healthy?null:'A required background worker is stopped or has outdated database settings. Restart the app to restart its workers; see App logs.'};
       }catch{health={at:Date.now(),error:'Could not verify required background workers. Check the preview runtime and App logs.'};}

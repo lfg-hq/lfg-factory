@@ -13,6 +13,14 @@ export const backgroundProcessSchema=z.object({
 export type BackgroundProcess=z.infer<typeof backgroundProcessSchema>;
 
 /** Upgrade older Node profiles using explicit repository scripts, never invent a worker. */
+/** A worker that is also an enabled companion app (same command) is already run, on its
+ *  port, by the companion supervisor. Starting it as a background process too makes two
+ *  copies; the companion replaces the first, and the health check then watches a dead pid. */
+export function workersNotRunAsServices(workers:BackgroundProcess[]=[],services:{runCmd?:string;enabled?:boolean;primary?:boolean}[]=[]):BackgroundProcess[]{
+ const norm=(c?:string)=>(c||'').trim().replace(/\s+/g,' ');
+ const asServices=new Set(services.filter(s=>s.enabled||s.primary).map(s=>norm(s.runCmd)).filter(Boolean));
+ return workers.filter(w=>!asServices.has(norm(w.runCmd)));
+}
 export function discoverBackgroundProcesses(pkg:{scripts?:Record<string,string>},existing:BackgroundProcess[]=[]):BackgroundProcess[]{
  const result=[...existing];
  for(const [name,command] of Object.entries(pkg.scripts||{})){
