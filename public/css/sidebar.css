@@ -1336,3 +1336,136 @@
 .sidebar.peeking #minimize-btn .peek-pin { display: inline-block; }
 /* "More" resets its font to inherit (button chrome), so size it like the other rows. */
 .sidebar:not(.minimized) .sidebar-nav button.nav-link.sidebar-more-toggle { font-size: 13.5px !important; line-height: 20px !important; }
+
+/* ── Calm sidebar (open state) ───────────────────────────────────────────────
+   Modelled on desktop-app sidebars: one flat background, every row in the same
+   text colour, quiet grey icons, and a soft grey highlight for the current page
+   and chat instead of purple. Section labels are plain small text, not caps.
+   The selectors carry #sidebar + html[data-theme] so they win over the older
+   light-mode.css and calm.css rules, which are !important throughout. */
+html[data-theme="light"] #sidebar {
+    --sb-bg: #f8f8f7;
+    --sb-text: #1f2328;
+    --sb-muted: #6b7280;
+    --sb-icon: #6b7280;
+    --sb-hover: rgba(15, 23, 42, 0.045);
+    --sb-active: rgba(15, 23, 42, 0.075);
+    --sb-border: #e7e7e4;
+}
+html[data-theme="dark"] #sidebar {
+    --sb-bg: #1b1b1b;
+    --sb-text: rgba(255, 255, 255, 0.88);
+    --sb-muted: rgba(255, 255, 255, 0.5);
+    --sb-icon: rgba(255, 255, 255, 0.55);
+    --sb-hover: rgba(255, 255, 255, 0.05);
+    --sb-active: rgba(255, 255, 255, 0.09);
+    --sb-border: rgba(255, 255, 255, 0.07);
+}
+html[data-theme] #sidebar {
+    background: var(--sb-bg) !important;
+    border-right: 1px solid var(--sb-border) !important;
+}
+html[data-theme] #sidebar .sidebar-header,
+html[data-theme] #sidebar .project-selector-section,
+html[data-theme] #sidebar .new-chat-section,
+html[data-theme] #sidebar .sidebar-nav,
+html[data-theme] #sidebar.sidebar .conversations-section,
+html[data-theme] #sidebar .sidebar-bottom-content {
+    background: transparent !important;
+    border-top: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
+}
+html[data-theme] #sidebar .logo-text { color: var(--sb-text) !important; }
+html[data-theme] #sidebar #minimize-btn { color: var(--sb-icon) !important; }
+html[data-theme] #sidebar #minimize-btn:hover { background: var(--sb-hover) !important; color: var(--sb-text) !important; }
+
+/* Every row: same text colour, normal weight, grey icon. */
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger,
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger .project-name-text,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link,
+html[data-theme] #sidebar:not(.minimized) .nav-link,
+html[data-theme] #sidebar:not(.minimized) .nav-link span.nav-text,
+html[data-theme] #sidebar:not(.minimized) .user-info-button,
+html[data-theme] #sidebar:not(.minimized) .username {
+    color: var(--sb-text) !important;
+    font-weight: 400 !important;
+    background: transparent !important;
+    opacity: 1 !important;
+}
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger i,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link i,
+html[data-theme] #sidebar:not(.minimized) .nav-link i,
+html[data-theme] #sidebar:not(.minimized) .nav-link:hover i,
+html[data-theme] #sidebar:not(.minimized) .nav-link.active i,
+html[data-theme] #sidebar:not(.minimized) #build-inbox-button i,
+html[data-theme] #sidebar:not(.minimized) .dropdown-icon {
+    color: var(--sb-icon) !important;
+    font-size: 14px !important;
+}
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger:hover,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link:hover,
+html[data-theme] #sidebar:not(.minimized) .nav-link:hover,
+html[data-theme] #sidebar:not(.minimized) .sidebar-nav .nav-link:hover:not(.active),
+html[data-theme] #sidebar:not(.minimized) .user-info-button:hover,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item:hover {
+    background: var(--sb-hover) !important;
+    color: var(--sb-text) !important;
+}
+html[data-theme] #sidebar:not(.minimized) .nav-link.active,
+html[data-theme] #sidebar:not(.minimized) .sidebar-nav .nav-link.active,
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger.active,
+html[data-theme] #sidebar:not(.minimized) #build-inbox-button[aria-expanded="true"],
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active {
+    background: var(--sb-active) !important;
+    color: var(--sb-text) !important;
+    box-shadow: none !important;
+}
+html[data-theme] #sidebar:not(.minimized) .nav-link.active .nav-text,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active .conversation-title { color: var(--sb-text) !important; }
+
+/* Notification count: a quiet grey number, not a purple pill. */
+html[data-theme] #sidebar:not(.minimized) #build-inbox-button .build-unread {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: var(--sb-muted) !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+    padding: 0 !important;
+    min-width: 0 !important;
+}
+
+/* Section labels and the chat list. */
+html[data-theme] #sidebar:not(.minimized) .sidebar-section-title,
+html[data-theme] #sidebar:not(.minimized) .conversation-group-label {
+    color: var(--sb-muted) !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    opacity: 1 !important;
+    padding: 14px 10px 4px !important;
+    margin: 0 !important;
+}
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-title {
+    color: var(--sb-text) !important;
+    font-weight: 400 !important;
+}
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item { border-radius: 7px !important; }
+html[data-theme] #sidebar .conversation-item .delete-conversation i,
+html[data-theme] #sidebar .conversation-item .conversation-pin i,
+html[data-theme] #sidebar .conversation-item .conversation-pin { color: var(--sb-icon) !important; }
+html[data-theme] #sidebar .conversation-item.is-pinned .conversation-pin,
+html[data-theme] #sidebar .conversation-item.is-pinned .conversation-pin i { color: var(--sb-muted) !important; }
+
+/* User row at the bottom: a small neutral avatar. */
+html[data-theme] #sidebar:not(.minimized) .user-avatar {
+    width: 26px !important;
+    height: 26px !important;
+    border-radius: 50% !important;
+    background: var(--sb-active) !important;
+}
+html[data-theme] #sidebar:not(.minimized) .avatar-text { color: var(--sb-text) !important; font-size: 12px !important; }
+html[data-theme] #sidebar:not(.minimized) .username { font-size: 13.5px !important; }

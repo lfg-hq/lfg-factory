@@ -117,7 +117,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-calm" />
   <link rel="stylesheet" href="/public/css/tickets.css?v=20260923-neutral-code" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />

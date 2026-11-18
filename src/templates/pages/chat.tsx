@@ -40,7 +40,7 @@ export function ChatPage({
   <script src="/public/js/ticket-map.js?v=20261015-map-groups" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-calm" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
