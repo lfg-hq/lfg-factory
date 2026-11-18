@@ -42,7 +42,7 @@ type TicketRow = {
 
 const READY = new Set(["review", "done", "merged", "archived"]);
 const RUNNING = new Set(["executing", "running", "stopping"]);
-const ACTIVE_STAGES = new Set<BuildStage>(["building", "committed", "checking", "testing", "repairing", "changing"]);
+const ACTIVE_STAGES = new Set<BuildStage>(["computer", "setup", "building", "pushing", "committed", "checking", "testing", "repairing", "changing"]);
 const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const label = (t: { ticketKey: string | null; name: string }) => (t.ticketKey ? `${t.ticketKey} ${t.name}` : t.name);

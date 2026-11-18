@@ -44,6 +44,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
+  <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261118-composer-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
@@ -590,6 +591,7 @@ export function ChatPage({
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261118-build-with"></script>
+  <script src="/public/js/workspace-status.js?v=20261118"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>

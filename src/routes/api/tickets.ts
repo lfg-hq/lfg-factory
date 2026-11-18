@@ -365,6 +365,15 @@ ticketsApi.get("/:projectId/build-progress", async (c) => {
   return c.json(await buildProgress(access.project.id, ids));
 });
 
+// ── GET /:projectId/workspace-status — the chat header's docs / tickets / building / preview strip ──
+ticketsApi.get("/:projectId/workspace-status", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const { workspaceStatus } = await import("../../services/build-progress.ts");
+  return c.json(await workspaceStatus(access.project.id));
+});
+
 ticketsApi.get("/:projectId/stages", async (c) => {
   const user = c.get("user");
   const { projectId } = c.req.param();

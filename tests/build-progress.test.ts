@@ -6,7 +6,7 @@ test('stage follows the build from queue to review', () => {
   expect(ticketStage({ status: 'open', queueStatus: 'none' }, [])).toBe('waiting');
   expect(ticketStage({ status: 'open', queueStatus: 'queued' }, [])).toBe('queued');
   const running = { status: 'in_progress', queueStatus: 'executing' };
-  expect(ticketStage(running, logs('Isolated build: spinning up a fresh sandbox'))).toBe('building');
+  expect(ticketStage(running, logs('Isolated build: spinning up a fresh sandbox'))).toBe('setup');
   expect(ticketStage(running, logs('**Build saved:** commit `abc1234` is pushed', 'Isolated build: x'))).toBe('committed');
   expect(ticketStage(running, logs('[Validation] Checking an HTTP response', '**Build saved:** commit'))).toBe('checking');
   expect(ticketStage(running, logs('[Validation] Browser: click', '[Validation] Reading application files'))).toBe('testing');
