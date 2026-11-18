@@ -7070,7 +7070,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(data => {
                     fileBrowserLoading.style.display = 'none';
-                    
+                    // LFG Desktop (Electron 33) misses a style update after this list is
+                    // drawn and paints the whole window blank until something restyles the
+                    // page. Restyle once on the next frame so it paints.
+                    requestAnimationFrame(() => document.body.style.setProperty('--docs-repaint', String(Date.now())));
+
                     // Update filter options if first load
                     if (page === 1 && data.filters && data.filters.types) {
                         updateTypeFilterOptions(data.filters.types);

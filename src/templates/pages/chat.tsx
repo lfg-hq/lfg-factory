@@ -579,10 +579,10 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js?v=20261118-retry"></script>
+  <script src="/public/js/markdown-config.js?v=20261118-retry2"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261118-docs-fast"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261118-docs-repaint"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js?v=20261118-panel-fit"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />

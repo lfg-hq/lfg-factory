@@ -175,9 +175,13 @@
             // A block is tried once per text. A diagram attempted while the document was
             // still being written fails on the half-written source; when the rest arrives
             // the same element holds new text and must be drawn again, not left as an error.
+            // A failure can also be momentary: a sequence diagram measures its text, and
+            // a page that has not painted yet measures nothing. A failed block is tried
+            // again a little later, up to three times for the same text.
             const text = code.textContent;
             const previous = pending.get(code);
-            if (previous && previous.text === text) return previous.job;
+            if (previous && previous.text === text && !(previous.failed && previous.tries < 3 && Date.now() >= previous.retryAt)) return previous.job;
+            const tries = previous && previous.text === text ? previous.tries + 1 : 1;
             if (code.closest('[contenteditable="true"], .codex-editor, .lfg-diagram, [data-streaming="true"], .orchestrator-streaming')) return;
             const job = (async () => {
                 const pre = code.parentElement;
@@ -217,6 +221,10 @@
                     figure.append(toolbar, drawing, details);
                     pre.replaceWith(figure);
                 } catch (error) {
+                    console.warn('[diagram] could not render', error);
+                    const entry = pending.get(code);
+                    if (entry && entry.text === text) { entry.failed = true; entry.retryAt = Date.now() + 1500; }
+                    if (tries < 3) setTimeout(() => render(), 1600);
                     if (!pre.isConnected) return;
                     pre.dataset.diagramError = 'true';
                     pre.title = 'Unable to render diagram. Mermaid source is shown.';
@@ -226,7 +234,7 @@
                     pre.before(notice);
                 }
             })();
-            pending.set(code, { text, job });
+            pending.set(code, { text, job, tries, failed: false, retryAt: 0 });
             return job;
         }));
     }
