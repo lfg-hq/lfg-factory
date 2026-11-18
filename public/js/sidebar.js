@@ -34,13 +34,33 @@ document.addEventListener('DOMContentLoaded', () => {
     // Hand off the first-paint state only after the real sidebar state is installed.
     requestAnimationFrame(() => document.documentElement.classList.remove('sidebar-minimized-preload'));
 
-    // Toggle sidebar minimized state
+    // Collapsed is the page's layout (appContainer.sidebar-minimized, remembered). While
+    // collapsed, hovering the rail "peeks": the sidebar opens over the page and closes
+    // when the pointer leaves. The header button then pins it open.
+    const collapsed = () => appContainer.classList.contains('sidebar-minimized');
+    let peekTimer = null;
+    function endPeek() {
+        clearTimeout(peekTimer);
+        if (!sidebar.classList.contains('peeking')) return;
+        sidebar.classList.remove('peeking');
+        sidebar.classList.add('minimized');
+        userInfo?.classList.remove('open');
+        minimizeBtn?.setAttribute('title', 'Collapse sidebar');
+    }
+    function startPeek() {
+        if (!collapsed() || sidebar.classList.contains('peeking')) return;
+        sidebar.classList.remove('minimized');
+        sidebar.classList.add('peeking');
+        minimizeBtn?.setAttribute('title', 'Keep sidebar open');
+    }
     function toggleMinimized() {
-        const isMinimized = sidebar.classList.contains('minimized');
-        if (isMinimized) {
-            sidebar.classList.remove('minimized');
+        clearTimeout(peekTimer);
+        if (collapsed()) {
+            // Pin open (from the peek, the logo or Cmd+B).
+            sidebar.classList.remove('minimized', 'peeking');
             appContainer.classList.remove('sidebar-minimized');
             localStorage.setItem('sidebarMinimized', 'false');
+            minimizeBtn?.setAttribute('title', 'Collapse sidebar');
         } else {
             sidebar.classList.add('minimized');
             appContainer.classList.add('sidebar-minimized');
@@ -48,12 +68,33 @@ document.addEventListener('DOMContentLoaded', () => {
             userInfo?.classList.remove('open');
         }
     }
-    
+
     // Minimize button click handler
     if (minimizeBtn) {
+        if (!minimizeBtn.querySelector('.peek-pin')) {
+            const pin = document.createElement('i');
+            pin.className = 'fas fa-thumbtack peek-pin';
+            pin.setAttribute('aria-hidden', 'true');
+            minimizeBtn.appendChild(pin);
+        }
         minimizeBtn.addEventListener('click', toggleMinimized);
     }
-    
+
+    // Peek only where there is a real pointer to hover with.
+    if (sidebar && appContainer && window.matchMedia('(hover: hover)').matches) {
+        sidebar.addEventListener('mouseenter', () => {
+            clearTimeout(peekTimer);
+            if (collapsed() && window.innerWidth > 768) peekTimer = setTimeout(startPeek, 120);
+        });
+        sidebar.addEventListener('mouseleave', () => {
+            clearTimeout(peekTimer);
+            // A short grace period, so brushing past the edge does not snap it shut;
+            // stay open while the account menu is in use.
+            peekTimer = setTimeout(() => { if (!userInfo?.classList.contains('open')) endPeek(); }, 280);
+        });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') endPeek(); });
+    }
+
     // Logo click handler in minimized state
     const logoSection = document.querySelector('.logo-section');
     if (logoSection) {

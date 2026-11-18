@@ -1210,7 +1210,8 @@
   transition:background-color .12s ease,color .12s ease !important;
 }
 #sidebar .conversations-section .conversation-title {
-  min-width:0; width:auto; flex:0 1 auto !important; display:block !important;
+  /* Fills the row, so pin and delete always sit at the right edge, not after the text. */
+  min-width:0; width:auto; flex:1 1 auto !important; display:block !important;
   white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important;
   overflow-wrap:anywhere; font-size:12px !important; line-height:1.5 !important;
   font-weight:400 !important; color:inherit !important;
@@ -1303,3 +1304,35 @@
 
 /* The appearance control lives in the account menu; hide its legacy slot before JS moves it. */
 #sidebar .bottom-nav [data-theme-toggle] { display: none !important; }
+
+/* ── Compact open sidebar ─────────────────────────────────────────────────────
+   Rows were ~44px with big type; these bring them to ~32px, like a desktop app's
+   sidebar, so more of the chat list fits. The collapsed icon rail is unchanged. */
+.sidebar:not(.minimized) .sidebar-header { padding: 12px 10px 6px 16px !important; }
+.sidebar:not(.minimized) .logo-section { gap: 8px; }
+.sidebar:not(.minimized) .logo-icon,
+.sidebar:not(.minimized) .logo-text { font-size: 1.15rem; }
+.sidebar:not(.minimized) .project-selector-section { padding: 2px 8px 2px; }
+.sidebar:not(.minimized) .project-dropdown-trigger { padding: 6px 10px; font-size: 13px; }
+.sidebar:not(.minimized) .new-chat-section { padding: 2px 8px 2px !important; }
+.sidebar:not(.minimized) .new-chat-link { padding: 6px 10px !important; gap: 10px !important; font-size: 13.5px !important; border-radius: 7px; }
+.sidebar:not(.minimized) .new-chat-link i { font-size: 15px !important; width: 20px !important; height: 20px !important; }
+.sidebar:not(.minimized) .sidebar-nav { padding: 0 8px 6px !important; }
+.sidebar:not(.minimized) .nav-link { padding: 6px 10px !important; gap: 10px !important; font-size: 13.5px !important; margin-bottom: 1px !important; border-radius: 7px !important; }
+.sidebar:not(.minimized) .nav-link i { font-size: 15px !important; width: 20px !important; }
+#sidebar:not(.minimized) .conversations-section { padding: 6px 8px 6px !important; }
+#sidebar:not(.minimized) .conversations-section .conversation-item { min-height: 30px; padding: 5px 10px !important; }
+#sidebar:not(.minimized) .conversations-section .conversation-title { font-size: 13px !important; }
+
+/* ── Peek: hovering the collapsed rail opens the sidebar over the page ─────────
+   The page keeps its collapsed layout underneath (nothing shifts); leaving the
+   sidebar closes it again. The pin in its header keeps it open (sidebar.js). */
+.sidebar.peeking {
+    width: 260px !important;
+    box-shadow: 4px 0 24px rgba(15, 23, 42, 0.12) !important;
+}
+#minimize-btn .peek-pin { display: none; }
+.sidebar.peeking #minimize-btn .fa-chevron-left { display: none; }
+.sidebar.peeking #minimize-btn .peek-pin { display: inline-block; }
+/* "More" resets its font to inherit (button chrome), so size it like the other rows. */
+.sidebar:not(.minimized) .sidebar-nav button.nav-link.sidebar-more-toggle { font-size: 13.5px !important; line-height: 20px !important; }

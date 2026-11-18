@@ -117,7 +117,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/tickets.css?v=20260923-neutral-code" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -927,7 +927,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
   </div>
 </div>
 
-<script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+<script src="/public/js/sidebar.js?v=20261118-peek"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->

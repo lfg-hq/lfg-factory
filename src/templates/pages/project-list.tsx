@@ -72,7 +72,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
   <title>Projects — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -526,7 +526,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/projects.js"></script>
   <script src="/public/js/agents.js"></script>
   <script>

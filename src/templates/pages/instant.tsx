@@ -113,7 +113,7 @@ export function InstantPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/styles.css" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/instant.css" />
@@ -484,7 +484,7 @@ export function InstantPage({
     }).replace(/</g, "\\u003c"))};
     window.__WS_PATH__ = '/ws/chat';
   </script>
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>

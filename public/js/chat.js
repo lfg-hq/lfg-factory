@@ -793,6 +793,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 loadConversations();
                 return;
             }
+            if (data.type === 'conversation_title' && data.conversationId && data.title) {
+                // The name written from the conversation replaces the first words.
+                const row = document.querySelector('.conversation-item[data-id="' + CSS.escape(data.conversationId) + '"]');
+                const label = row && row.querySelector('.conversation-title');
+                if (label) { label.textContent = data.title; label.title = data.title; row.setAttribute('aria-label', data.title); }
+                return;
+            }
             if (data.type === 'message_rejected') {
                 restoreUnsentMessage(data.message, data.files || []);
                 alert(data.reason);

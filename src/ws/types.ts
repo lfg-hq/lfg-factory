@@ -30,7 +30,8 @@ export type WSOutgoing =
   | { type: "error"; message: string }
   | { type: "token_usage_updated" }
   | { type: "document_stream"; documentType: string; name?: string; content: string; isFinal: boolean }
-  | { type: "conversation_created"; conversationId: string };
+  | { type: "conversation_created"; conversationId: string }
+  | { type: "conversation_title"; conversationId: string; title: string };
 
 export interface ChatHistoryMessage {
   id: string;

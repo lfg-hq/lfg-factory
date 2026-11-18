@@ -138,7 +138,7 @@ export function ProjectDetailPage({
   <script src="/public/js/document-sync.js?v=20261024" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
   <link rel="stylesheet" href="/public/css/project-home.css?v=20261116-calls" />
@@ -1843,7 +1843,7 @@ export function ProjectDetailPage({
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
   <script src="/public/js/board-sync.js"></script>
   <script></script>

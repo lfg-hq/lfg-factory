@@ -25,7 +25,7 @@ export function WhiteboardsPage({ project, user, canEdit }: Props) {
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -176,7 +176,7 @@ export function WhiteboardsPage({ project, user, canEdit }: Props) {
     </div>
   </div>
   </div>
-<script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+<script src="/public/js/sidebar.js?v=20261118-peek"></script>
 <script src="/public/js/sidebar-chats.js"></script>
 <script src="${fresh("/public/js/whiteboards.js")}"></script>
 <script>

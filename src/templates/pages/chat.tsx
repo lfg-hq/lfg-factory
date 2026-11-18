@@ -40,7 +40,7 @@ export function ChatPage({
   <script src="/public/js/ticket-map.js?v=20261015-map-groups" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-peek" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
@@ -593,14 +593,14 @@ export function ChatPage({
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/git-tab.js"></script>
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="${fresh("/public/js/boards-tab.js")}"></script>
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261118-instant-scroll"></script>
+  <script src="/public/js/chat.js?v=20261118-titles"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
