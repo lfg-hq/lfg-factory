@@ -592,7 +592,7 @@ export function ChatPage({
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
-  <script src="/public/js/git-tab.js?v=20261118"></script>
+  <script src="/public/js/git-tab.js?v=20261118-describe"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
