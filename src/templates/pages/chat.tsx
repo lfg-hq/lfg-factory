@@ -579,7 +579,7 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
+  <script src="/public/js/markdown-config.js?v=20261118-retry"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/artifacts-loader.js?v=20261118-docs-fast"></script>

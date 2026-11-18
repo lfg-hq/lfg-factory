@@ -172,10 +172,20 @@
     async function render(root = document) {
         const blocks = [...root.querySelectorAll('pre > code.language-mermaid')];
         await Promise.all(blocks.map(code => {
-            if (pending.has(code)) return pending.get(code);
+            // A block is tried once per text. A diagram attempted while the document was
+            // still being written fails on the half-written source; when the rest arrives
+            // the same element holds new text and must be drawn again, not left as an error.
+            const text = code.textContent;
+            const previous = pending.get(code);
+            if (previous && previous.text === text) return previous.job;
             if (code.closest('[contenteditable="true"], .codex-editor, .lfg-diagram, [data-streaming="true"], .orchestrator-streaming')) return;
             const job = (async () => {
                 const pre = code.parentElement;
+                if (pre.dataset.diagramError) {
+                    delete pre.dataset.diagramError;
+                    pre.removeAttribute('title');
+                    if (pre.previousElementSibling?.classList.contains('diagram-error')) pre.previousElementSibling.remove();
+                }
                 try {
                     const api = await load();
                     const { svg } = await renderSource(api, code.textContent);
@@ -216,7 +226,7 @@
                     pre.before(notice);
                 }
             })();
-            pending.set(code, job);
+            pending.set(code, { text, job });
             return job;
         }));
     }
