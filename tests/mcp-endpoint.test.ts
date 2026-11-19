@@ -53,6 +53,11 @@ test("handshake and tool list: LFG's tools, without the fields the server fills 
 
   const list = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
   const names = list.result.tools.map((t: { name: string }) => t.name);
+  // Claude Code rejects the WHOLE list (every LFG tool vanishes) if any inputSchema isn't an object.
+  for (const t of list.result.tools) expect(t.inputSchema.type, t.name).toBe("object");
+  const hp = list.result.tools.find((t: { name: string }) => t.name === "handlePreview");
+  expect(hp.inputSchema.properties.action.enum).toEqual(expect.arrayContaining(["restart_app", "manage_data", "expose_port"]));
+  expect(hp.inputSchema.required).toEqual(["action"]);
   for (const n of ["createTickets", "streamDocumentContent", "getProjectDashboard", "askUser", "loadSkill", "runInPreview", "handlePreview", "getPreviewDiagnostics"]) expect(names).toContain(n);
   const create = list.result.tools.find((t: { name: string }) => t.name === "createTickets");
   expect(Object.keys(create.inputSchema.properties)).not.toContain("projectId");
