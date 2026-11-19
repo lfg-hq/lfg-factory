@@ -75,6 +75,9 @@ test("bad arguments and unknown tools come back as tool errors, not crashes", as
   expect(bad.result.isError).toBe(true);
   const unknown = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "rm_rf", arguments: {} } })).json();
   expect(unknown.result.isError).toBe(true);
+  // Strict tool schemas (the preview tools) must not get the server's fields pushed into them.
+  const preview = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "handlePreview", arguments: { action: "manage_data", instruction: "Reset the demo user's password" } } })).json();
+  expect(preview.result.content[0].text).not.toContain("Invalid arguments");
   const method = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 6, method: "resources/list" })).json();
   expect(method.error.code).toBe(-32601);
 });

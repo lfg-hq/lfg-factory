@@ -35,11 +35,24 @@ async function publicSchema(tool: any): Promise<Record<string, unknown>> {
   return schema;
 }
 
+/** Property names a JSON schema accepts, including in anyOf/oneOf/allOf branches. */
+function declaredKeys(schema: any, out = new Set<string>()): Set<string> {
+  if (!schema || typeof schema !== "object") return out;
+  for (const key of Object.keys(schema.properties ?? {})) out.add(key);
+  for (const branch of [...(schema.anyOf ?? []), ...(schema.oneOf ?? []), ...(schema.allOf ?? [])]) declaredKeys(branch, out);
+  return out;
+}
+
 async function callTool(tools: Record<string, any>, grant: TurnGrant, name: string, args: Record<string, unknown>, callId: string, signal: AbortSignal) {
   const tool = tools[name];
   if (!tool?.execute) return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
-  const input = { ...args, projectId: grant.projectId ?? undefined, userId: grant.userId, conversationId: grant.conversationId };
   const schema = asSchema(tool.inputSchema);
+  // Fill in the server-owned fields only where the tool declares them: strict schemas
+  // (the preview tools) reject unknown keys, which failed every preview call.
+  const declared = declaredKeys(await schema.jsonSchema);
+  const owned: Record<string, unknown> = { projectId: grant.projectId ?? undefined, userId: grant.userId, conversationId: grant.conversationId };
+  const input = { ...args };
+  for (const key of SERVER_OWNED) { if (declared.has(key)) input[key] = owned[key]; else delete input[key]; }
   const checked = schema.validate ? await schema.validate(input) : { success: true as const, value: input };
   if (!checked.success) return { content: [{ type: "text", text: `Invalid arguments for ${name}: ${String((checked as { error?: unknown }).error ?? "")}`.slice(0, 2000) }], isError: true };
   try {
