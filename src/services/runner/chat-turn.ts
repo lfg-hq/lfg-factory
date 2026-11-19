@@ -126,7 +126,7 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
       instructionsMode: "replace",
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
-      instructions: `${input.instructions}\n\nLFG's tools are available through the MCP server named "lfg"; the tool names in these instructions refer to them. Use them for anything that should be saved or shared (documents, tickets, epics, notes): that is how your work reaches the user's team. When your working folder is a checkout of the project's repository, read its files directly for questions about the code or what the app does.`,
+      instructions: `${input.instructions}\n\nLFG's tools are available through the MCP server named "lfg"; the tool names in these instructions refer to them. Use them for anything that should be saved or shared (documents, tickets, epics, notes): that is how your work reaches the user's team. The tools available can change between messages (LFG is updated, a connection is restored): if an earlier message in this conversation says a tool was unavailable or failed, call it again now before telling the user you can't do something. When your working folder is a checkout of the project's repository, read its files directly for questions about the code or what the app does.`,
       mcp: { url: `${origin}/mcp/turn/${turnId}`, token },
     },
   });
