@@ -321,6 +321,7 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
     canChangeBuildStages: access.role === "owner",
     // Where builds and previews run: "cloud" | "computer" | null (each person's setting).
     runOn: (access.project as { runOn?: string | null }).runOn ?? null,
+    previewOn: (access.project as { previewOn?: string | null }).previewOn ?? null,
     customInstructions: p.customInstructions ?? "",
     meetingVoice: !!(access.project as { meetingVoice?: boolean }).meetingVoice,
     // Spoken replies need the server's OpenAI key; without it the switch can't do anything.
@@ -368,10 +369,11 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
     patch[col] = body[field] === "" ? null : body[field];
   }
   // Where this project's builds and previews run. Owner-only: it decides whose machine runs them.
-  if (body.runOn !== undefined) {
-    if (access.role !== "owner") return c.json({ error: "Only the project owner can change where builds run." }, 403);
-    if (body.runOn !== "" && body.runOn !== null && body.runOn !== "cloud" && body.runOn !== "computer") return c.json({ error: "runOn must be cloud, computer or empty." }, 400);
-    patch.runOn = body.runOn || null;
+  for (const field of ["runOn", "previewOn"] as const) {
+    if (body[field] === undefined) continue;
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change where builds and previews run." }, 403);
+    if (body[field] !== "" && body[field] !== null && body[field] !== "cloud" && body[field] !== "computer") return c.json({ error: `${field} must be cloud, computer or empty.` }, 400);
+    patch[field] = body[field] || null;
   }
   if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
   // Credential sharing lends the OWNER's Git token to collaborators — owner-only.

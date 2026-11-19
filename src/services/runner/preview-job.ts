@@ -45,8 +45,8 @@ export async function resolvePreviewWhere(userId: string, opts: { requested?: un
     if (ticketChoice === "cloud") return { where: "cloud", reason: "This ticket is set to build in the cloud, so its preview runs there too." };
   }
   if (!ticketChoice && opts.projectId && opts.requested !== "computer") {
-    const [p] = await db.select({ runOn: projects.runOn }).from(projects).where(eq(projects.id, opts.projectId)).limit(1);
-    if (projectRunOn(p?.runOn) === "cloud") return { where: "cloud" };
+    const [p] = await db.select({ previewOn: projects.previewOn }).from(projects).where(eq(projects.id, opts.projectId)).limit(1);
+    if (projectRunOn(p?.previewOn) === "cloud") return { where: "cloud" };
   }
   const settings = await localAiSettings(userId);
   if (!settings.enabled) return { where: "cloud" };

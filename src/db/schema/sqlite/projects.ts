@@ -96,6 +96,7 @@ export const projects = sqliteTable(
     meetingVoice: integer("meeting_voice", { mode: "boolean" }).notNull().default(false),
     // See ../pg/projects.ts — where builds and previews run (cloud | computer | null).
     runOn: text("run_on"),
+    previewOn: text("preview_on"),
     // See ../pg/projects.ts — per-project agent instructions.
     customInstructions: text("custom_instructions"),
     // See ../pg/projects.ts — when ON the agent's preview shell may write, not just read.

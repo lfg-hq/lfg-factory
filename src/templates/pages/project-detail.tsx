@@ -1433,16 +1433,26 @@ export function ProjectDetailPage({
             <label style="display:flex;gap:10px;align-items:center"><input id="cfg-checks-enabled" type="checkbox" disabled /> Run checks after each build</label>
             <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/build-stage-settings.js?v=20261119-run-on"></script>
+          <script src="/public/js/build-stage-settings.js?v=20261119-preview-on"></script>
           <div class="agent-card">
-            <div class="agent-card-head"><div><h3>Where builds run</h3><p>Where ticket builds and the preview run for this project. A ticket's own Build with choice still wins.</p></div></div>
-            <div class="cfg-field" style="max-width:340px;">
-              <span class="cfg-field-label">Run builds and previews</span>
-              <select class="cfg-select" id="cfg-run-on" disabled>
-                <option value="cloud">In an LFG sandbox</option>
-                <option value="computer">On each person's computer (LFG Desktop)</option>
-                <option value="">Each person's own setting</option>
-              </select>
+            <div class="agent-card-head"><div><h3>Where builds and previews run</h3><p>Ticket builds and the preview can run in different places. A ticket's own Build with choice still wins for its build.</p></div></div>
+            <div class="cfg-fields">
+              <div class="cfg-field" style="max-width:340px;">
+                <span class="cfg-field-label">Build tickets</span>
+                <select class="cfg-select" id="cfg-run-on" data-field="runOn" disabled>
+                  <option value="computer">On each person's computer (LFG Desktop)</option>
+                  <option value="cloud">In an LFG sandbox</option>
+                  <option value="">Each person's own setting</option>
+                </select>
+              </div>
+              <div class="cfg-field" style="max-width:340px;">
+                <span class="cfg-field-label">Run the preview</span>
+                <select class="cfg-select" id="cfg-preview-on" data-field="previewOn" disabled>
+                  <option value="cloud">In an LFG sandbox</option>
+                  <option value="computer">On each person's computer (LFG Desktop)</option>
+                  <option value="">Each person's own setting</option>
+                </select>
+              </div>
             </div>
             <p id="cfg-run-on-status" role="status" style="font-size:12px;color:var(--text-secondary)"></p>
           </div>
