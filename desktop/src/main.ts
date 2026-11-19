@@ -93,6 +93,10 @@ function ensureWindow(): BrowserWindow {
   // The website's sign-in pages mean "not signed in here": show the app's own sign-in.
   const isSignInPage = (url: URL) => url.origin === origin() && /^\/auth\/(login|register)\/?$/.test(url.pathname);
   const guard = (event: Electron.Event, raw: string) => {
+    // Only the app's own page. will-redirect also fires for frames inside it: the Preview
+    // panel's iframe of the app being built redirects (e.g. to its /login), and treating that
+    // as leaving LFG blanked the panel and opened the preview in the browser instead.
+    if ((event as { isMainFrame?: boolean }).isMainFrame === false) return;
     let url: URL;
     try { url = new URL(raw); } catch { return; }
     if (url.protocol === "file:") return;
