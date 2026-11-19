@@ -98,6 +98,8 @@ export async function startTicketOnRunner(input: {
     ticketTitle: ticket.name,
     repoUrl: project.repoUrl,
     branch,
+    // Like a cloud build, the ticket lands on its epic branch so the next ticket builds on it.
+    ...(anchor.anchorBranch && anchor.anchorBranch !== branch ? { mergeInto: anchor.anchorBranch } : {}),
     startFrom: [...new Set([anchor.anchorBranch, anchor.baseBranch, "main", "master"])],
     prompt: input.followUp ? buildFollowUpPrompt(ticket, input.followUp) : buildRunnerPrompt(ticket, input.notes),
     commitMessage: `${ticket.ticketKey ? `${ticket.ticketKey}: ` : ""}${ticket.name}`.slice(0, 200),

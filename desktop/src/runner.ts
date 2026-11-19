@@ -415,7 +415,7 @@ interface TaskContext {
 }
 
 export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
-  : Promise<{ branch: string; commitSha: string | null; summary?: string }> {
+  : Promise<{ branch: string; commitSha: string | null; summary?: string; mergeSha?: string; mergeError?: string }> {
   const p = job.payload;
   const repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));
   const worktree = join(ctx.workRoot, "worktrees", p.branch.replace(/[^A-Za-z0-9._-]+/g, "-"));
@@ -467,18 +467,91 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   });
   check();
 
+  const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
+    ? [] : ["-c", "user.name=LFG Desktop", "-c", "user.email=lfg-desktop@localhost"];
   if ((await git(["status", "--porcelain"], worktree)).trim()) {
-    const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
-      ? [] : ["-c", "user.name=LFG Desktop", "-c", "user.email=lfg-desktop@localhost"];
     await git(["add", "-A"], worktree);
     await git([...identity, "commit", "-m", p.commitMessage || "LFG Desktop changes"], worktree);
   }
   const head = (await git(["rev-parse", "HEAD"], worktree)).trim();
-  if (head === base) return { branch: p.branch, commitSha: null, summary };
-  check();
-  ctx.progress(`Pushing ${p.branch}…`);
-  await git(["push", "-u", "origin", `HEAD:refs/heads/${p.branch}`], worktree);
-  return { branch: p.branch, commitSha: head, summary };
+  let commitSha: string | null = null;
+  if (head !== base) {
+    check();
+    ctx.progress(`Pushing ${p.branch}…`);
+    await git(["push", "-u", "origin", `HEAD:refs/heads/${p.branch}`], worktree);
+    commitSha = head;
+  }
+  // Land the ticket branch on its epic branch, like a cloud build does. Runs even
+  // when this run changed nothing, so earlier unmerged work on the branch lands too.
+  const merge = await mergeIntoTarget(p, { ...ctx, repoDir, identity, check, tools });
+  return { branch: p.branch, commitSha, summary, ...merge };
+}
+
+/** Merge the pushed ticket branch into `p.mergeInto` and push it. Conflicts go to the agent once. */
+export async function mergeIntoTarget(p: ClaudeTaskPayload, ctx: TaskContext & {
+  repoDir: string; identity: string[]; check(): void; tools: string[];
+}): Promise<{ mergeSha?: string; mergeError?: string }> {
+  const target = p.mergeInto;
+  if (!target || target === p.branch || !REF.test(target)) return {};
+  const git = (args: string[], cwd = ctx.repoDir) => mustRun("git", args, { cwd, env: ctx.env, timeoutMs: 10 * 60_000 }, `git ${args[0]}`);
+  const tryGit = (args: string[], cwd: string) => run("git", args, { cwd, env: ctx.env, timeoutMs: 10 * 60_000 });
+  const source = `refs/remotes/origin/${p.branch}`;
+  const wt = join(ctx.workRoot, "worktrees", `merge-${target.replace(/[^A-Za-z0-9._-]+/g, "-")}`);
+  const dropWorktree = async () => {
+    if (existsSync(wt)) await run("git", ["worktree", "remove", "--force", wt], { cwd: ctx.repoDir, env: ctx.env });
+    rmSync(wt, { recursive: true, force: true });
+    await run("git", ["worktree", "prune"], { cwd: ctx.repoDir, env: ctx.env });
+  };
+  try {
+    // The target can move while we merge (another ticket landing): fetch and retry once.
+    for (let round = 0; round < 2; round++) {
+      ctx.check();
+      await git(["fetch", "--prune", "origin"]);
+      if ((await tryGit(["rev-parse", "--verify", "--quiet", source], ctx.repoDir)).code !== 0) return {};
+      const targetRef = `refs/remotes/origin/${target}`;
+      const targetExists = (await tryGit(["rev-parse", "--verify", "--quiet", targetRef], ctx.repoDir)).code === 0;
+      if (targetExists && (await tryGit(["merge-base", "--is-ancestor", source, targetRef], ctx.repoDir)).code === 0) {
+        return { mergeSha: (await git(["rev-parse", targetRef])).trim() }; // already on the epic branch
+      }
+      await dropWorktree();
+      // A missing epic branch starts as the ticket branch (which was cut from the epic's base).
+      await git(["worktree", "add", "--detach", wt, targetExists ? targetRef : source]);
+      if (targetExists) {
+        ctx.progress(`Merging ${p.branch} into ${target}…`);
+        const merged = await tryGit([...ctx.identity, "merge", "--no-ff", "-m", `Merge ${p.branch} into ${target}`, source], wt);
+        if (merged.code !== 0) {
+          const conflicts = (await tryGit(["diff", "--name-only", "--diff-filter=U"], wt)).stdout.trim();
+          if (!conflicts) throw new Error(`git merge failed: ${(merged.stderr || merged.stdout).trim().slice(0, 300)}`);
+          ctx.progress(`Merge conflicts in ${conflicts.split("\n").join(", ")}. Asking ${AGENTS[ctx.agent].label} to resolve them…`);
+          await runAgent(ctx.agent, {
+            prompt: [
+              `Merging ticket branch ${p.branch} into ${target} hit conflicts in:`, conflicts, "",
+              "Resolve every conflict so both sides' intent is kept, remove all conflict markers, and make sure the code still builds.",
+              "Do not commit, push, abort the merge or switch branches. LFG Desktop finishes the merge.",
+            ].join("\n"),
+            cwd: wt, allowedTools: ctx.tools, maxTurns: 40, env: ctx.env, bin: ctx.bin,
+            onEvent: ctx.agentEvent,
+          });
+          ctx.check();
+          await git(["add", "-A"], wt);
+          const left = (await tryGit(["diff", "--cached", "--name-only", "-G", "^(<<<<<<<|>>>>>>>) ", "HEAD"], wt)).stdout.trim();
+          if (left) { await tryGit(["merge", "--abort"], wt); throw new Error(`conflicts left unresolved in ${left.split("\n").join(", ")}`); }
+          await git([...ctx.identity, "commit", "--no-edit"], wt);
+        }
+      }
+      ctx.check();
+      ctx.progress(`Pushing ${target}…`);
+      const pushed = await tryGit(["push", "origin", `HEAD:refs/heads/${target}`], wt);
+      if (pushed.code === 0) return { mergeSha: (await git(["rev-parse", "HEAD"], wt)).trim() };
+      if (round === 1) throw new Error(`push to ${target} was rejected: ${(pushed.stderr || pushed.stdout).trim().slice(0, 300)}`);
+    }
+    return {};
+  } catch (error) {
+    if ((error as Error).message === "Cancelled") throw error;
+    return { mergeError: `Couldn't merge ${p.branch} into ${target}: ${(error as Error).message}` };
+  } finally {
+    await dropWorktree().catch(() => {});
+  }
 }
 
 export { run } from "./proc.ts";

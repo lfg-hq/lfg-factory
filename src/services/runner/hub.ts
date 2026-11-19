@@ -328,7 +328,7 @@ export async function cancelTicketJobs(ticketId: string): Promise<number> {
 }
 
 async function finishJob(jobId: string, deviceId: string,
-  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }): Promise<void> {
+  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }): Promise<void> {
   clearTimeout(lostTimers.get(jobId)); lostTimers.delete(jobId);
   const updated = await db.update(runnerJobs).set({
     status: result.ok ? "succeeded" : "failed",
@@ -359,7 +359,32 @@ async function finishJob(jobId: string, deviceId: string,
     pushed
       ? `Pushed ${(result.commitSha ?? "").slice(0, 7)} to ${result.branch ?? job.branch}.`
       : `${agentLabel(job)} finished without changing any files.`);
+  await recordMerge(job, result);
   buildFinished(job, pushed ? "complete" : "failed");
+}
+
+/** The computer merged (or couldn't merge) the ticket branch into its epic branch. */
+async function recordMerge(job: typeof runnerJobs.$inferSelect, result: { mergeSha?: string; mergeError?: string }) {
+  if (!job.ticketId || (!result.mergeSha && !result.mergeError)) return;
+  let target = "the epic branch";
+  try { target = (JSON.parse(job.payload) as { mergeInto?: string }).mergeInto ?? target; } catch { /* keep the default */ }
+  if (result.mergeSha) {
+    await db.update(projectTickets).set({ githubMergeStatus: "merged", githubMergeCommitSha: result.mergeSha.slice(0, 64), updatedAt: new Date() })
+      .where(eq(projectTickets.id, job.ticketId));
+    await logToTicket(job, `Merged into ${target} (${result.mergeSha.slice(0, 7)}).`, "command");
+    const [ticket] = await db.select({ epicId: projectTickets.epicId }).from(projectTickets).where(eq(projectTickets.id, job.ticketId)).limit(1);
+    if (ticket?.epicId) {
+      const { maybeSubmitEpicForReview } = await import("../epics.ts");
+      await maybeSubmitEpicForReview(ticket.epicId).catch(e => console.warn("[runner] epic review hand-off failed:", (e as Error).message));
+    }
+  } else {
+    await db.update(projectTickets).set({ githubMergeStatus: "merge_failed", updatedAt: new Date() }).where(eq(projectTickets.id, job.ticketId));
+    await logToTicket(job, `${result.mergeError} The ticket's work is saved on its branch; use Push & Merge on the ticket to try again.`, "cli_error");
+  }
+  const ownerId = await projectOwner(job.projectId);
+  for (const userId of new Set([ownerId, job.userId].filter(Boolean) as string[])) {
+    broadcastToUser(userId, { type: "ticket_status", ticketId: job.ticketId, mergeStatus: result.mergeSha ? "merged" : "merge_failed" });
+  }
 }
 
 /** A ticket build on a computer finished: report it like a cloud build, so a build run moves on. */

@@ -52,6 +52,8 @@ export interface ClaudeTaskPayload {
   repoUrl: string;
   /** Branch the work lands on (created if missing, pushed when done). */
   branch: string;
+  /** After pushing `branch`, merge it into this branch (the ticket's epic branch) and push that too. */
+  mergeInto?: string;
   /** Branches to cut a new `branch` from, first that exists on the remote wins. */
   startFrom: string[];
   prompt: string;
@@ -169,5 +171,5 @@ export type RunnerToServer =
   | { type: "job.event"; jobId: string; event: AgentEvent }
   /** A preview's progress, log lines and local address (protocol 3). */
   | { type: "job.preview"; jobId: string; update: PreviewUpdate }
-  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }
+  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }
   | { type: "pong" };
