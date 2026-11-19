@@ -163,15 +163,18 @@ app.use("/uploads/*", async (c, next) => {
   let artifactPath: string;
   try { artifactPath = decodeURIComponent(c.req.path); } catch { return c.text("Invalid path", 400); }
   if (!artifactPath.startsWith("/uploads/ticket-tests/")) return next();
-  if (!/^\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+\/(recording\.mp4|step-[0-9]+\.jpg|failure\.jpg|live\.jpg|status\.json)$/.test(artifactPath)) return c.text("Not found", 404);
+  if (!/^\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+\/((?:step|shot)-[0-9]+\.jpg|recording\.mp4|failure\.jpg|live\.jpg|status\.json)$/.test(artifactPath)) return c.text("Not found", 404);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) return c.text("Unauthorized", 401);
   const ticketId = artifactPath.split("/")[3];
   const {canReadTicketRecording}=await import("./services/ticket-recording-access.ts");
   if(!await canReadTicketRecording(ticketId!,session.user.id))return c.text("Not found",404);
   c.header("Cache-Control", "private, no-store");
-  const {isS3Enabled,getPresignedGetUrl}=await import("./services/s3.ts");
-  if(!isS3Enabled)return c.text("Recording object storage is not configured",503);
+  const {isS3Enabled,getPresignedGetUrl,localStorageFile}=await import("./services/s3.ts");
+  if(!isS3Enabled){
+    const {serveLocalRecording}=await import("./services/recording-local-serve.ts");
+    return serveLocalRecording(localStorageFile(artifactPath.slice("/uploads/".length)),c.req.raw);
+  }
   try {
     const signed=await getPresignedGetUrl(artifactPath.slice("/uploads/".length),300);
     const headers:Record<string,string>={};

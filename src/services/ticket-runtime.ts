@@ -193,7 +193,7 @@ After reclaiming space, create ${root} and write ${report} as JSON: {"runId":"${
     if(!result.featureTest)throw new Error('Feature testing applicability and plan are missing. Add featureTest to the runtime report.');
     const {runTicketFeatureTesting}=await import('./ticket-feature-testing.ts');
     if(!deps && result.featureTest.kind==='browser' && !browser?.started)throw new Error('Open the live browser with lfg_browser start now; a written test plan is not an executed browser test.');
-    if(browser?.started){if(!browser.passed)throw new Error('Live browser outcome assertions have not passed. Use lfg_browser to exercise and finish the test.');}
+    if(browser?.started){if(!browser.passed){const detail=browser.unconfirmed();throw new Error('Live browser outcome assertions have not passed'+(detail?' — '+detail:'')+'. Use lfg_browser to exercise and finish the test.');}}
     else await (d.featureTest ?? runTicketFeatureTesting)({workspaceId:o.workspaceId,ticketId:ctx.ticketId!,root,appUrl:result.appUrl,plan:result.featureTest,deadline,cancelled:ctx.cancelled,check:d.check,shell:d.shell,progress:d.progress,redact});
    }
    if(featureOnly){

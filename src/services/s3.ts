@@ -35,6 +35,11 @@ function localPath(key: string): string {
   return p;
 }
 
+/** Local copy of a stored object when S3 is off (recordings are served through an access-checked route). */
+export function localStorageFile(key: string): string {
+  return localPath(key);
+}
+
 async function localWrite(key: string, body: Buffer | Uint8Array | string): Promise<void> {
   const p = localPath(key);
   await fs.mkdir(dirname(p), { recursive: true });
@@ -286,7 +291,7 @@ export async function deleteContent(s3Key: string | null | undefined): Promise<v
 
 /** Stream large recorder output without loading the complete video into memory. */
 export async function uploadBinaryFile(key:string,path:string,contentType:string):Promise<void>{
- if(!isS3Enabled)throw Error('Object storage is required for recording artifacts');
+ if(!isS3Enabled){const target=localPath(key);await fs.mkdir(dirname(target),{recursive:true});await fs.copyFile(path,target);return;}
  const info=await fs.stat(path);
  await getClient().send(new PutObjectCommand({Bucket:env.AWS_S3_BUCKET_NAME,Key:key,Body:createReadStream(path),ContentLength:info.size,ContentType:contentType}));
 }
