@@ -1041,6 +1041,8 @@ This sandbox was started fresh (the prepared preview could not be copied), so de
 export const CODEX_PLAN_FALLBACKS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"];
 /** OpenAI's answer when a ChatGPT account can't use a Codex model. */
 export const planRejectsModel = (text: string) => /model is not supported when using Codex with a ChatGPT account/i.test(text);
+/** OpenAI rejected the ChatGPT access token (revoked before its stated expiry). */
+export const tokenRejected = (text: string) => /authentication token has expired|token_expired|token has been invalidated|refresh_token_reused/i.test(text);
 
 const executingProjects = new Set<string>();
 // Per-ticket in-flight guard. Prevents the same ticket from executing twice
@@ -3638,6 +3640,8 @@ git branch --show-current
       // transient LOST-CONTACT/timeout is infra (not a build failure) so it retries
       // generously (MAX_INFRA_RESUMES); a real cut-short (OOM/runaway) gets the small
       // MAX_BUILD_RESUMES. Only after exhausting the relevant budget do we give up.
+      let forceTokenRefresh = false; // set once after OpenAI rejects the ChatGPT token
+      let tokenRefreshed = false;
       let attempt = 0;       // total resumes (drives the "continue" preface + settle)
       let infraResumes = 0;  // lost-contact / poll-timeout (transient) — generous budget
       let workResumes = 0;   // OOM / runaway (did work, cut short) — small budget
@@ -3657,8 +3661,10 @@ git branch --show-current
           // whether the token minted is how Pi ends up started with neither credential
           // ("an API key or OAuth access token is required") on a user who has a key.
           ...(await (async () => {
+            const force = forceTokenRefresh;
+            forceTokenRefresh = false;
             const tok = useOpenAICodex
-              ? await getOpenAICodexAccessToken(buildLlm.actorId).catch(async (e: Error) => {
+              ? await getOpenAICodexAccessToken(buildLlm.actorId, { force }).catch(async (e: Error) => {
                   await addLog(ticketId, `OpenAI Codex subscription token unavailable (${e.message?.slice(0, 120)})${providerApiKey ? " — using the stored API key instead" : ""}`, "command", ownerId).catch(() => {});
                   return undefined;
                 })
@@ -3740,6 +3746,19 @@ git branch --show-current
           triedModels.add(fallback);
           await sleep(1500);
           continue;
+        }
+
+        // OpenAI revoked the ChatGPT token before its stated expiry: refresh it and start once more.
+        if (useOpenAICodex && !tokenRefreshed && tokenRejected(`${reason}\n${piResult.tail.slice(-4000)}`)) {
+          await killPiInVm(workspaceId, pi.backgroundPid);
+          await addLog(ticketId, "OpenAI rejected the ChatGPT sign-in as expired; refreshing it and starting the build again.", "command", ownerId);
+          tokenRefreshed = true;
+          forceTokenRefresh = true;
+          await sleep(1500);
+          continue;
+        }
+        if (useOpenAICodex && tokenRejected(`${reason}\n${piResult.tail.slice(-4000)}`)) {
+          await addLog(ticketId, "OpenAI still rejects the ChatGPT sign-in after refreshing it. Reconnect ChatGPT in Settings → Integrations, then retry this ticket.", "cli_error", ownerId);
         }
 
         const finalReason = attempt > 0 ? `${reason} (still unfinished after ${attempt} auto-resume${attempt > 1 ? "s" : ""})` : reason;
