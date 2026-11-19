@@ -1056,10 +1056,22 @@ const executingTickets = new Set<string>();
 
 /** Where this person's build of this ticket runs: the ticket's own choice, else their setting. */
 async function buildTargetFor(ticketId: string, actorId: string | undefined) {
+  // A build queued without a person (a chat retry, the queue after a restart) belongs to
+  // whoever requested it, else the project owner. With nobody, it always went to the cloud,
+  // ignoring the project's "Build tickets: on each person's computer".
+  if (!actorId) {
+    const { getBuildOrigin } = await import("../services/build-reporting.ts");
+    actorId = (await getBuildOrigin(ticketId)).userId ?? undefined;
+  }
+  if (!actorId) {
+    const [owner] = await db.select({ ownerId: projects.ownerId }).from(projectTickets)
+      .innerJoin(projects, eq(projects.id, projectTickets.projectId)).where(eq(projectTickets.id, ticketId)).limit(1);
+    actorId = owner?.ownerId ?? undefined;
+  }
   const { resolveBuildTarget, projectRunOn } = await import("../services/runner/build-target.ts");
   const [row] = await db.select({ details: projectTickets.details, runOn: projects.runOn }).from(projectTickets)
     .innerJoin(projects, eq(projects.id, projectTickets.projectId)).where(eq(projectTickets.id, ticketId)).limit(1);
-  return resolveBuildTarget(actorId, row?.details, projectRunOn(row?.runOn));
+  return { ...(await resolveBuildTarget(actorId, row?.details, projectRunOn(row?.runOn))), actorId };
 }
 
 /** Hand a build or a ticket-chat follow-up to the person's own computer. */
@@ -1155,9 +1167,9 @@ export async function startTicketWorker() {
 
     // "Use my computer for AI": the person who started this build runs it on their own
     // computer (LFG Desktop + their agent), not in a cloud sandbox.
-    const target = projectId ? await buildTargetFor(ticketId, event.payload.actorId) : { where: "cloud" as const };
-    if (target.where === "computer" && event.payload.actorId && projectId) {
-      await sendToTheirComputer(ticketId, projectId, event.payload.actorId, { notes: event.payload.notes, fromQueue: true, agent: target.agent });
+    const target: Awaited<ReturnType<typeof buildTargetFor>> = projectId ? await buildTargetFor(ticketId, event.payload.actorId) : { where: "cloud", actorId: undefined };
+    if (target.where === "computer" && target.actorId && projectId) {
+      await sendToTheirComputer(ticketId, projectId, target.actorId, { notes: event.payload.notes, fromQueue: true, agent: target.agent });
       return;
     }
     if (target.where === "cloud" && target.reason) {

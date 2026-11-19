@@ -420,7 +420,8 @@ export const retryTicket = tool({
     await reportBuildStatus(ticketId, "queued", "Build queued.");
     // Emit queued event to trigger execution
     const { emit } = await import("../../events/bus.ts");
-    emit({ type: "ticket.queued", ticketId, projectId: row?.projectId ?? "" });
+    // Who asked decides where it builds (their computer or a sandbox), as for the Build button.
+    emit({ type: "ticket.queued", ticketId, projectId: row?.projectId ?? "", ...(userId ? { actorId: userId } : {}) });
     return { success: true, ticketId, note: "Ticket queued for execution" };
   },
 });
