@@ -41,7 +41,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-ticket-in-panel" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-ticket-in-panel2" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-tab-counts" />
