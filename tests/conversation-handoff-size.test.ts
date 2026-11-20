@@ -41,3 +41,9 @@ test('replayed tool steps count toward the size, but are not sent to the summari
   expect(seen.length).toBeGreaterThan(0);
   expect(seen.join('')).not.toContain('yyyy');
 });
+
+test('with compact off (a chat on the computer) a long overdue backlog is never sent to the summarizer', async () => {
+  const store = fakeStore(Array.from({ length: 120 }, (_, i) => row(i, 2000)));
+  await loadConversationHandoff('c', async () => { throw new Error('should not summarize'); }, store, { compact: false });
+  expect(store.writes.length).toBe(0);
+});

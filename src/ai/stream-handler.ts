@@ -1066,6 +1066,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         chatDiagnostic('summary_helper_failed', { reason: safeErrorReason(error) });
       }
     }
+    // On the computer there is no server chat model to fall back on.
+    if (!model) throw new Error("No summary model: the helper model failed and this chat runs on the computer.");
     return (await generateText({ model, ...options })).text;
   };
   const summarize = (evidence: string, maxChars = summaryChars): Promise<string> => {
@@ -1078,10 +1080,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // turn). If that refresh has kept failing and the backlog outgrew what a turn loads, it
   // condenses now, visibly, rather than letting messages fall out of view unseen.
   let overdueCondense = false;
+  // On the computer the agent keeps its own session and condenses it itself; the server
+  // only reads a saved checkpoint, never summarizes (it has no chat model for that turn).
   const handoff = await loadConversationHandoff(convId!, (evidence, maxChars) => {
     if (!overdueCondense) { overdueCondense = true; req.onActivity?.(); noteActivity("Condensing earlier context", "compactContext"); condenseNotice("start"); }
     return summarize(evidence, maxChars);
-  }, undefined, { compact: 'overdue', budget: profile.budget });
+  }, undefined, { compact: useLocal ? false : 'overdue', budget: profile.budget });
   if (overdueCondense) condenseNotice("done");
   let handoffShift = 0;
   if (handoff) {
