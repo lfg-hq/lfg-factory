@@ -78,7 +78,7 @@ const GOVERNANCE: Array<[icon: string, title: string, body: string]> = [
 ];
 
 const CASE_STUDIES: Array<[string, string, string, string]> = [
-  ["Mags", "mags", `${S}/mags.png`, "Job-runner platform, built end to end on the factory."],
+  ["Mags Sandboxes", "mags-sandboxes", `${S}/mags.png`, "MicroVM sandboxes for AI agents, built end to end on the factory."],
   ["Easylogs", "easylogs", `${S}/easylogs.png`, "Developer observability platform, requirements through production."],
   ["Kitereach", "kitereach", `${S}/kitereach.png`, "Go-to-market product stack, shipped and running live."],
 ];
@@ -437,13 +437,13 @@ ${SiteNav({ active: "home" })}
           <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">We were our own first customer.</h2>
           <p class="text-slate-600 text-lg mt-4">These products went from idea to production on the factory, and they're still running.</p>
         </div>
-        <a href="/case-studies/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors shrink-0">
-          All case studies <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        <a href="/portfolio/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors shrink-0">
+          See all our work <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
       </div>
       <div class="grid md:grid-cols-3 gap-6">
         ${CASE_STUDIES.map(([name, slug, img, blurb]) => html`
-          <a href="/case-studies/${slug}/" class="group rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col hover:border-brand-300 transition-colors">
+          <a href="/portfolio/${slug}/" class="group rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col hover:border-brand-300 transition-colors">
             <img src="${img}" alt="${name}" loading="lazy" class="w-full aspect-[16/10] object-cover object-top border-b border-slate-100" />
             <div class="p-6 flex flex-col flex-1">
               <h3 class="font-display font-bold text-lg text-slate-900 group-hover:text-brand-700 transition-colors">${name}</h3>

@@ -72,11 +72,11 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
   <title>Projects — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/workspace-picker.css" />
@@ -526,7 +526,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/projects.js"></script>
   <script src="/public/js/agents.js"></script>
   <script>

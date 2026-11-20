@@ -7037,11 +7037,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Function to fetch and display files
             const fetchFiles = (page = 1) => {
-                // Show loading state
-                fileBrowserLoading.style.display = 'block';
-                fileBrowserEmpty.style.display = 'none';
-                fileBrowserList.style.display = 'none';
-                fileBrowserPagination.style.display = 'none';
+                // Keep the list on screen while it refreshes; the spinner is only for the
+                // first load, so reopening the tab no longer blanks it for a moment.
+                if (!fileBrowserList.children.length) {
+                    fileBrowserLoading.style.display = 'block';
+                    fileBrowserEmpty.style.display = 'none';
+                    fileBrowserList.style.display = 'none';
+                    fileBrowserPagination.style.display = 'none';
+                }
                 
                 const params = new URLSearchParams({
                     page: page,
@@ -7067,7 +7070,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(data => {
                     fileBrowserLoading.style.display = 'none';
-                    
+                    // LFG Desktop (Electron 33) misses a style update after this list is
+                    // drawn and paints the whole window blank until something restyles the
+                    // page. Restyle once on the next frame so it paints.
+                    requestAnimationFrame(() => document.body.style.setProperty('--docs-repaint', String(Date.now())));
+
                     // Update filter options if first load
                     if (page === 1 && data.filters && data.filters.types) {
                         updateTypeFilterOptions(data.filters.types);

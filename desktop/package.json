@@ -22,15 +22,16 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.7.2"
   },
   "build": {
     "appId": "ai.lfg.desktop",
     "productName": "LFG",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "files": [
       "dist/**",
@@ -41,17 +42,26 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "resources/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "LFG uses the microphone when you dictate a message or talk to the agent."
+      }
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "resources/icon.png"
     },
     "linux": {
       "target": [
         "AppImage"
-      ]
+      ],
+      "icon": "resources/icon.png"
     }
   }
 }

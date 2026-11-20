@@ -245,13 +245,16 @@ async function withUserTokenLock<T>(userId: string, fn: () => Promise<T>): Promi
   }
 }
 
-export async function getOpenAICodexAccessToken(userId: string): Promise<string> {
+/** `force`: refresh even though the stored token looks valid. OpenAI can revoke a token
+ *  before its expiry (the same ChatGPT login used elsewhere), and then rejects it with
+ *  "Your authentication token has expired" although `expires` is days away. */
+export async function getOpenAICodexAccessToken(userId: string, opts: { force?: boolean } = {}): Promise<string> {
   return withUserTokenLock(userId, async () => {
     const stored = await getStoredCredential(userId);
     if (!stored) throw new Error("OpenAI Codex is not connected for this user");
     // Most builds need no auth workspace at all: return the still-valid encrypted-at-rest
     // access token directly. The workspace is only a refresh broker near expiration.
-    if (stored.expires > Date.now() + 5 * 60_000) return stored.access;
+    if (!opts.force && stored.expires > Date.now() + 5 * 60_000) return stored.access;
 
     let sandbox = await getAuthSandbox(userId);
     let workspaceId = sandbox?.magsWorkspaceId ?? null;

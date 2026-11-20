@@ -9,8 +9,10 @@
  * - askUser / confirmAction return "shown, wait for the reply"; the chat turn that relays
  *   the agent's events (step 4) renders the card from the tool call, as the server does.
  * - streamDocumentContent saves the whole document when called (no live typing effect).
- * Left out: provider web search (the agent has its own), Composio connectors, the
- * preview shell/actions (they need the live chat socket), quickChange (off by default).
+ * - The preview tools (inspect, diagnostics, runInPreview, handlePreview) work as on the
+ *   web; only their live progress lines are dropped (they went to the chat socket).
+ * Left out: provider web search (the agent has its own), Composio connectors,
+ * quickChange (off by default).
  */
 
 import { eq } from "drizzle-orm";
@@ -29,7 +31,25 @@ export async function buildMcpTools(grant: TurnGrant): Promise<Record<string, an
     const [project] = await db.select({ publicId: projects.projectId }).from(projects).where(eq(projects.id, grant.projectId)).limit(1);
     Object.assign(tools, (await import("./tools/note-tools.ts")).noteTools({ projectId: grant.projectId, userId: grant.userId }));
     if (project) tools.linkTicketDocuments = linkTicketDocumentsTool({ projectId: grant.projectId, publicProjectId: project.publicId, userId: grant.userId });
+    if (project) Object.assign(tools, await previewTools(grant, project.publicId));
   }
-  tools = withConversationContext(tools, grant.conversationId, grant.userId, grant.projectId, grant.messageId);
+  // The agent runs on the user's computer and may read the app from a local checkout.
+  tools = withConversationContext(tools, grant.conversationId, grant.userId, grant.projectId, grant.messageId, { localCheckout: true });
   return tools;
+}
+
+/** The live preview, as the web chat gets it (stream-handler.ts): read-only inspection,
+ *  diagnostics, a shell for checks, and operations such as resetting a preview password. */
+async function previewTools(grant: TurnGrant, publicProjectId: string): Promise<Record<string, any>> {
+  const projectId = grant.projectId!;
+  const { createPreviewInspectTool, createPreviewRunTool } = await import("../services/dev-preview.ts");
+  const { previewDiagnosticsTool } = await import("./tools/preview-diagnostics.ts");
+  const { previewActionTool } = await import("./tools/preview-action-tools.ts");
+  const ctx = { projectId, publicProjectId, userId: grant.userId, conversationId: grant.conversationId };
+  return {
+    ...(await createPreviewInspectTool({ projectId })),
+    getPreviewDiagnostics: previewDiagnosticsTool({ projectId, publicProjectId, userId: grant.userId }),
+    runInPreview: createPreviewRunTool(ctx),
+    handlePreview: previewActionTool(ctx),
+  };
 }

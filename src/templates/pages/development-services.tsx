@@ -82,7 +82,7 @@ ${SiteNav({ active: "services" })}
         <a href="/#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
           Talk to us about a project <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
-        <a href="/case-studies/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
+        <a href="/portfolio/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
           See what we have shipped
         </a>
       </div>
@@ -221,7 +221,7 @@ ${SiteNav({ active: "services" })}
       </p>
       <div class="flex flex-wrap gap-3">
         <a href="/how-it-works/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors">How the factory works <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
-        <a href="/case-studies/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors">Case studies <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+        <a href="/portfolio/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors">Our portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
       </div>
     </div>
   </section>

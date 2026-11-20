@@ -7,13 +7,14 @@ import { db } from "../config/db.ts";
 import { projectTickets, ticketLogs } from "../db/schema/tickets.ts";
 import { isChatTurnActive } from "./ticket-chat-turn.ts";
 
-export type BuildStage = "waiting" | "queued" | "building" | "committed" | "checking" | "testing" | "repairing" | "changing" | "ready" | "failed" | "stopped";
+export type BuildStage = "waiting" | "queued" | "computer" | "setup" | "building" | "pushing" | "committed" | "checking" | "testing" | "repairing" | "changing" | "ready" | "failed" | "stopped";
 export const STAGE_LABELS: Record<BuildStage, string> = {
-  waiting: "Waiting", queued: "Queued", building: "Building", committed: "Code committed",
+  waiting: "Waiting", queued: "Queued", computer: "Waiting for your computer", setup: "Setting up", building: "Writing code",
+  pushing: "Pushing", committed: "Code committed",
   checking: "Starting the app", testing: "Testing in the browser", repairing: "Fixing an issue", changing: "Making changes",
   ready: "Ready for review", failed: "Needs attention", stopped: "Stopped",
 };
-const ACTIVE = new Set<BuildStage>(["queued", "building", "committed", "checking", "testing", "repairing", "changing"]);
+const ACTIVE = new Set<BuildStage>(["queued", "computer", "setup", "building", "pushing", "committed", "checking", "testing", "repairing", "changing"]);
 
 type LogLine = { text: string; type: string | null };
 const clean = (text: string) => text.replace(/^\[(Validation|Feature testing)\]\s*/, "").replace(/\*\*/g, "")
@@ -29,7 +30,10 @@ function runningStage(logs: LogLine[]): BuildStage {
     if (/^Feature testing|^\[Feature testing\]/i.test(raw) || /^Browser: |Live browser/i.test(text)) return "testing";
     if (/^\[Validation\]/.test(raw) || /^(Running the saved ticket|Validation scope|Checks:|App readiness|Preview readiness)/i.test(text)) return "checking";
     if (/^(Build saved:|Build complete)/i.test(text)) return "committed";
-    if (/^(Isolated build|Starting Pi build|Starting (ticket )?build|Building ticket)/i.test(text)) return "building";
+    if (/^(Pushing |Committing changes)/i.test(text)) return "pushing";
+    if (/^(Starting Pi build|Starting (ticket )?build|Building ticket|Starting (Claude Code|OpenAI Codex|GitHub Copilot))/i.test(text)) return "building";
+    if (/^(Isolated build|Creating VM workspace|Cloning|Setting up repo|Fetching the latest|Checking out |Sent to )/i.test(text)) return "setup";
+    if (/^Waiting for your computer/i.test(text)) return "computer";
   }
   return "building";
 }
@@ -116,3 +120,39 @@ export async function recentWorkSummary(ticketId: string): Promise<string> {
   return "";
 }
 
+
+/**
+ * The chat header's at-a-glance strip: how many docs and tickets the project has, which
+ * tickets are building right now (stage, since when, on the person's computer or in the
+ * cloud), and whether the preview is up.
+ */
+export async function workspaceStatus(projectId: string) {
+  const { count } = await import("drizzle-orm");
+  const { projectFiles } = await import("../db/schema/documents.ts");
+  const { projectEnvironments } = await import("../db/schema/project-environments.ts");
+  const { runnerJobs } = await import("../db/schema/runners.ts");
+  const ticketCols = { id: projectTickets.id, queuedAt: projectTickets.queuedAt, updatedAt: projectTickets.updatedAt };
+  const [[docs], [tickets], queued, recent, [env]] = await Promise.all([
+    db.select({ n: count() }).from(projectFiles).where(eq(projectFiles.projectId, projectId)),
+    db.select({ n: count() }).from(projectTickets).where(eq(projectTickets.projectId, projectId)),
+    db.select(ticketCols).from(projectTickets)
+      .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.queueStatus, ["queued", "executing", "stopping"]))).limit(20),
+    // A ticket-chat turn runs outside the queue; it is tracked in memory, so check recent tickets.
+    db.select(ticketCols).from(projectTickets).where(eq(projectTickets.projectId, projectId)).orderBy(desc(projectTickets.updatedAt)).limit(50),
+    db.select({ status: projectEnvironments.previewStatus }).from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId)).limit(1),
+  ]);
+  const rows = [...queued, ...recent.filter((t) => isChatTurnActive(t.id))];
+  const ids = [...new Set(rows.map((t) => t.id))].slice(0, 20);
+  const progress = ids.length ? await buildProgress(projectId, ids) : { active: false, tickets: [] };
+  const jobs = ids.length
+    ? await db.select({ ticketId: runnerJobs.ticketId, createdAt: runnerJobs.createdAt, agent: runnerJobs.agent }).from(runnerJobs)
+        .where(and(inArray(runnerJobs.ticketId, ids), inArray(runnerJobs.status, ["queued", "offered", "running"])))
+    : [];
+  const since = new Map(rows.map((t) => [t.id, t.queuedAt ?? t.updatedAt]));
+  const building = progress.tickets.filter((t) => t.active).map((t) => {
+    const job = jobs.find((j) => j.ticketId === t.id);
+    const start = job?.createdAt ?? since.get(t.id) ?? null;
+    return { ...t, where: job ? "computer" as const : "cloud" as const, agent: job?.agent ?? null, since: start ? start.toISOString() : null };
+  });
+  return { docs: Number(docs?.n ?? 0), tickets: Number(tickets?.n ?? 0), building, preview: env?.status ?? "idle" };
+}

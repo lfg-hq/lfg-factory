@@ -10,7 +10,7 @@
  * RUNNER_PROTOCOL_VERSION on any incompatible change.
  */
 
-export const RUNNER_PROTOCOL_VERSION = 2;
+export const RUNNER_PROTOCOL_VERSION = 3;
 
 /** The coding agents a computer can run, headless. */
 export const AGENT_KINDS = ["claude", "codex", "copilot"] as const;
@@ -52,6 +52,8 @@ export interface ClaudeTaskPayload {
   repoUrl: string;
   /** Branch the work lands on (created if missing, pushed when done). */
   branch: string;
+  /** After pushing `branch`, merge it into this branch (the ticket's epic branch) and push that too. */
+  mergeInto?: string;
   /** Branches to cut a new `branch` from, first that exists on the remote wins. */
   startFrom: string[];
   prompt: string;
@@ -89,9 +91,62 @@ export interface ChatTurnPayload {
   mcp: { url: string; token: string };
 }
 
+/** The app's own commands for running a preview, from its saved preview plan. */
+export interface PreviewPlan {
+  stack?: string;
+  installCmd?: string;
+  buildCmd?: string;
+  /** Starts the main app in the foreground on `port`. */
+  runCmd: string;
+  port: number;
+  /** Extra apps in the same repo that are switched on (the main one is runCmd/port). */
+  services?: Array<{ name: string; runCmd: string; buildCmd?: string; port: number; dir?: string }>;
+  /** Databases the app connects to, and the variable it reads each connection from. */
+  databases: Array<{ engine: "postgres" | "mysql" | "redis" | "mssql"; connectionEnvVar: string; connectionFormat: string; databaseName?: string }>;
+  migrations?: string[];
+  seedCmd?: string;
+}
+
+/** Run the project's app on the person's computer (protocol 3). */
+export interface PreviewPayload {
+  protocol: number;
+  /** The project's public id: names this preview's folder on the computer. */
+  projectId: string;
+  projectName: string;
+  repoUrl: string;
+  /** Branch to run; null runs the repository's default branch. */
+  branch: string | null;
+  /** What the person picked, e.g. "REC-23 — SDR backend". */
+  label: string;
+  /** Fetch the latest code and install again (Update & rebuild), rather than reuse what's there. */
+  refresh: boolean;
+  /** null: LFG has no saved plan yet, so the computer works one out from the repository. */
+  plan: PreviewPlan | null;
+  /** The project's environment variables (the person can already read them on the Env tab). */
+  env: Record<string, string>;
+  /** The cloud preview's own addresses (https origins). Env values pointing at them mean "this app" and are pointed at localhost here. */
+  cloudOrigins?: string[];
+}
+
+export type PreviewPhase = "detecting" | "provisioning" | "installing" | "seeding" | "starting" | "running" | "error" | "stopped";
+export type PreviewStepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+export interface PreviewStep { id: string; label: string; status: PreviewStepStatus; command?: string }
+export interface PreviewUrl { name: string; url: string; port: number; primary?: boolean }
+
+/** What a preview on the computer reports back, any field optional. */
+export interface PreviewUpdate {
+  status?: PreviewPhase;
+  steps?: PreviewStep[];
+  /** New setup / app log lines. */
+  lines?: string[];
+  urls?: PreviewUrl[];
+  error?: string;
+}
+
 export type RunnerJobOffer =
   | { id: string; type: "claude_task"; payload: ClaudeTaskPayload }
-  | { id: string; type: "chat_turn"; payload: ChatTurnPayload };
+  | { id: string; type: "chat_turn"; payload: ChatTurnPayload }
+  | { id: string; type: "preview"; payload: PreviewPayload };
 
 export type ServerToRunner =
   | { type: "welcome"; deviceId: string; deviceName: string; protocol: number }
@@ -103,7 +158,9 @@ export type ServerToRunner =
 export type RunnerToServer =
   | { type: "hello"; appVersion?: string; platform?: string; claudeVersion?: string | null; activeJobIds?: string[];
       /** Agents installed on this computer, with their versions (protocol 2). */
-      agents?: Array<{ kind: AgentKind; version: string }> }
+      agents?: Array<{ kind: AgentKind; version: string }>;
+      /** The protocol this runner speaks (protocol 3 and later; absent means 2). */
+      protocol?: number }
   | { type: "job.accepted"; jobId: string }
   | { type: "job.rejected"; jobId: string; reason?: string }
   /** A short human status line from the runner itself (cloning, pushing…). */
@@ -112,5 +169,7 @@ export type RunnerToServer =
   | { type: "job.agent_event"; jobId: string; event: Record<string, unknown> }
   /** One normalized agent event, from any agent (protocol 2). */
   | { type: "job.event"; jobId: string; event: AgentEvent }
-  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }
+  /** A preview's progress, log lines and local address (protocol 3). */
+  | { type: "job.preview"; jobId: string; update: PreviewUpdate }
+  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }
   | { type: "pong" };

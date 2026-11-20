@@ -1586,7 +1586,14 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
             }
           }
           if (toolOutput(event)?.error || toolOutput(event)?.warning) {
-            const detail = `${toolLabel(event.toolName)} incomplete — using available findings`;
+            // Say what went wrong. "Incomplete — using available findings" read like a
+            // partial search even when a tool refused outright (previewPage saved nothing).
+            const failure = toolOutput(event)?.error;
+            const reason = typeof failure === "string" ? failure.replace(/\s+/g, " ").trim() : "";
+            const short = reason.length > 140 ? reason.slice(0, 140).replace(/\s+\S*$/, "") + "…" : reason;
+            const detail = failure
+              ? `${toolLabel(event.toolName)} didn't finish${short ? `: ${short}` : ""}`
+              : `${toolLabel(event.toolName)} incomplete — using available findings`;
             noteActivity(detail, event.toolName, true);
             ws.send(JSON.stringify({
               type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
@@ -1843,10 +1850,20 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
   // ── 9. Auto-generate title for new conversations ─────────────────────────────
   const isNewConv = !req.conversationId;
+  // The sidebar shows the new title as soon as it is written.
+  const announceTitle = (title: string) => {
+    try { ws.send(JSON.stringify({ type: "conversation_title", conversationId: convId, title })); } catch { /* socket gone */ }
+  };
   if (isNewConv && fullResponse && !abortController.signal.aborted && useLocal) {
-    // No server model to write a title: use the first words of the request.
-    const title = userMessage.replace(/\s+/g, " ").trim().split(" ").slice(0, 7).join(" ").slice(0, 60);
-    if (title) void db.update(conversations).set({ title, updatedAt: new Date() }).where(eq(conversations.id, convId!)).catch(() => {});
+    // No server model ran this chat. Name it with a small model the user already has
+    // (their ChatGPT subscription or a saved key); the first words only as a last resort.
+    const words = userMessage.replace(/\s+/g, " ").trim().split(" ").slice(0, 7).join(" ").slice(0, 60);
+    void (async () => {
+      const { localTitleModel } = await import("./title-model.ts");
+      const titleModel = await localTitleModel(userId, projectId, userApiKeys).catch(() => null);
+      if (titleModel && await withUsageOperation("title", () => generateTitle(convId!, userMessage, fullResponse, titleModel, announceTitle)).catch(() => false)) return;
+      if (words) { await db.update(conversations).set({ title: words, updatedAt: new Date() }).where(eq(conversations.id, convId!)).catch(() => {}); announceTitle(words); }
+    })();
   } else if (isNewConv && fullResponse && !abortController.signal.aborted) {
     // Titling is a cheap, mechanical subtask — route it to the provider's lite
     // model (staying in-provider reuses the user's existing key). Fall back to
@@ -1858,7 +1875,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     } catch {
       // keep the full model
     }
-    withUsageOperation("title", () => generateTitle(convId, userMessage, fullResponse, titleModel)).catch(() => {});
+    withUsageOperation("title", () => generateTitle(convId, userMessage, fullResponse, titleModel, announceTitle)).catch(() => {});
   }
 
   return { conversationId: convId };
@@ -1868,30 +1885,37 @@ async function generateTitle(
   convId: string,
   userMessage: string,
   assistantResponse: string,
-  model: ReturnType<typeof getModel>
-) {
+  model: ReturnType<typeof getModel>,
+  onTitle?: (title: string) => void,
+): Promise<boolean> {
   try {
     const result = await streamText({
       model,
       messages: [
         {
           role: "user",
-          content: `Generate a short, descriptive title (5 words max) for this conversation based on the first exchange. Respond with ONLY the title, no quotes or punctuation.\n\nUser: ${userMessage.slice(0, 200)}\nAssistant: ${assistantResponse.slice(0, 200)}`,
+          content: "Name this conversation for a sidebar: what it is about, in 3 to 6 words, Title Case, " +
+            "for example \"SDR Demo Calls in Hindi\" or \"Case Study for Phone Screening\". Never repeat the opening words " +
+            "of the request (\"In this project, I want to\"). Reply with ONLY the title, no quotes or punctuation.\n\n" +
+            `User: ${userMessage.slice(0, 800)}\nAssistant: ${assistantResponse.slice(0, 500)}`,
         },
       ],
-      maxOutputTokens: 20,
+      maxOutputTokens: 24,
     });
 
     let title = "";
     for await (const chunk of result.textStream) {
       title += chunk;
     }
-    title = title.trim().replace(/^["']|["']$/g, "");
+    title = title.trim().split("\n")[0]!.replace(/^["'\s]+|["'.\s]+$/g, "").slice(0, 80);
 
     if (title) {
       await db.update(conversations).set({ title, updatedAt: new Date() }).where(eq(conversations.id, convId));
+      onTitle?.(title);
+      return true;
     }
   } catch {
     // Title generation failing is non-critical
   }
+  return false;
 }

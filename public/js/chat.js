@@ -100,6 +100,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Track whether messages have been loaded to prevent duplicate loading
     let conversationLoadedViaRest = false;
     let conversationLoadVersion = 0;
+    // Assigned once the input is set up (below). Declared here because opening a chat
+    // from its URL calls loadConversation() first, which cancels any dictation.
+    let dictation = null;
 
     // Extract project ID from path
     const pathProjectId = extractProjectIdFromPath();
@@ -348,7 +351,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // If we have a conversation ID, load that conversation's messages
     if (currentConversationId) {
         console.log('[init] loading conversation:', currentConversationId);
-        loadConversation(currentConversationId);
+        // Run after the rest of this setup: loadConversation() uses constants declared
+        // further down (HISTORY_PAGE, dictation, …), which do not exist yet at this line.
+        const initialConversationId = currentConversationId;
+        setTimeout(() => loadConversation(initialConversationId), 0);
     }
     
     // New chat button click handler
@@ -663,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Stop inserts a draft; the explicit recording Send button finalizes then submits.
-    const dictation = window.createDictation?.({
+    dictation = window.createDictation?.({
         onSend: () => chatForm.requestSubmit(),
         button: document.getElementById('record-audio-btn'), input: chatInput,
         wrapper: document.querySelector('#chat-form .input-wrapper'),
@@ -789,6 +795,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentConversationId = data.conversationId;
                 window.currentConversationId = currentConversationId;
                 window.dispatchEvent(new Event('chat-conversation-changed'));
+                // Show the new chat in the sidebar now, not when the agent's turn ends.
+                loadConversations();
+                return;
+            }
+            if (data.type === 'conversation_title' && data.conversationId && data.title) {
+                // The name written from the conversation replaces the first words.
+                const row = document.querySelector('.conversation-item[data-id="' + CSS.escape(data.conversationId) + '"]');
+                const label = row && row.querySelector('.conversation-title');
+                if (label) { label.textContent = data.title; label.title = data.title; row.setAttribute('aria-label', data.title); }
                 return;
             }
             if (data.type === 'message_rejected') {
@@ -3798,7 +3813,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let trailTimer = null;
 
     function finishWorkPhase() {
-        finalizeTrail(activeTrail?.dataset.warning === 'true' ? 'Worked with warnings' : 'Worked');
+        finalizeTrail(activeTrail?.dataset.warning === 'true' ? 'Worked · last step failed' : 'Worked');
     }
 
     function beginResponseBlock() {
@@ -3859,6 +3874,10 @@ document.addEventListener('DOMContentLoaded', () => {
             activeTrail.dataset.warning = 'true';
             // A subsequent retry must not overwrite the failure in the trail.
             if (!step.key) step.key = 'warning-' + Date.now();
+        } else if (activeTrail.dataset.warning === 'true') {
+            // The agent carried on after the failed step (usually a retry that worked):
+            // the row stays in the trail, but the turn did not end on a problem.
+            activeTrail.dataset.warning = 'recovered';
         }
         const steps = activeTrail.querySelector('.agent-trail-steps');
         const text = step.detail || step.label || 'Thinking…';
@@ -4049,7 +4068,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateTrailMeta(trail);
         trail.classList.remove('is-running');
         trail.classList.add('is-done', 'is-collapsed');
-        const terminal = outcome || (trail.dataset.warning === 'true' ? 'Completed with warnings' : 'Completed');
+        const terminal = outcome || (trail.dataset.warning === 'true' ? 'Completed · last step failed' : 'Completed');
         trail.dataset.outcome = terminal === 'Completed' || terminal === 'Worked' ? 'success'
             : terminal === 'Failed' ? 'failed'
             : terminal === 'Stopped' ? 'stopped' : 'warning';
@@ -4520,6 +4539,24 @@ document.addEventListener('DOMContentLoaded', () => {
     function getLastAssistantMessage() {
         const all = messageContainer.querySelectorAll('.message.assistant');
         return all.length ? all[all.length - 1] : null;
+    }
+
+    // Cards, diagrams and images in the history finish rendering after the first jump and
+    // push the latest message down. Stay at the bottom while they settle (up to 5s; diagrams load a large library),
+    // unless the user scrolls up or opens another chat.
+    function holdAtBottomWhileSettling(loadVersion) {
+        const until = performance.now() + 5000;
+        let lastHeight = chatMessages.scrollHeight;
+        const tick = () => {
+            if (loadVersion !== conversationLoadVersion || userScrolledUp || performance.now() > until) return;
+            if (chatMessages.scrollHeight !== lastHeight) {
+                lastHeight = chatMessages.scrollHeight;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                lastScrollTop = chatMessages.scrollTop;
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
     }
 
     function scrollToBottom(force = false) {
@@ -5073,6 +5110,11 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[loadConversation] response status:', response.status);
             if (!response.ok) {
                 console.error('[loadConversation] Failed:', response.status, await response.text());
+                // A deleted chat (or one you can no longer open): start a new chat
+                // instead of leaving "Loading conversation…" on screen.
+                if ((response.status === 404 || response.status === 403) && loadVersion === conversationLoadVersion && currentProjectId) {
+                    window.location.replace('/chat/project/' + encodeURIComponent(currentProjectId) + '?new=1');
+                }
                 return;
             }
             const data = await response.json();
@@ -5135,7 +5177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Open at the latest message, or at the very first when jumping to the start.
-            if (all) { userScrolledUp = true; chatMessages.scrollTop = 0; } else scrollToBottom(true);
+            if (all) { userScrolledUp = true; chatMessages.scrollTop = 0; } else { scrollToBottom(true); holdAtBottomWhileSettling(loadVersion); }
         } catch (error) {
             console.error('Error loading conversation:', error);
         } finally {

@@ -93,6 +93,13 @@ export const projects = pgTable(
     // In a call, the meeting bot also SPEAKS its answers instead of only typing them in the
     // meeting chat. Off by default: speech uses OpenAI's paid text-to-speech on the server's key.
     meetingVoice: boolean("meeting_voice").notNull().default(false),
+    // Where this project's ticket builds run: "cloud" = an LFG sandbox,
+    // "computer" = the person's own computer (LFG Desktop). NULL = each person's
+    // "Use my computer for AI" setting decides. A ticket's own Build with choice still wins.
+    runOn: text("run_on"),
+    // Where this project's previews run, separately from builds ("cloud" | "computer").
+    // NULL = each person's own setting.
+    previewOn: text("preview_on"),
     // Free-text instructions the user wants EVERY agent on this project to follow —
     // reaches both the chat agent and each ticket build.
     customInstructions: text("custom_instructions"),

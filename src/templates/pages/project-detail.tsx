@@ -138,14 +138,14 @@ export function ProjectDetailPage({
   <script src="/public/js/document-sync.js?v=20261024" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
   <link rel="stylesheet" href="/public/css/project-home.css?v=20261116-calls" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/project-team.css">
@@ -1130,7 +1130,7 @@ export function ProjectDetailPage({
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
           <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261118-docs-repaint"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
@@ -1433,7 +1433,29 @@ export function ProjectDetailPage({
             <label style="display:flex;gap:10px;align-items:center"><input id="cfg-checks-enabled" type="checkbox" disabled /> Run checks after each build</label>
             <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/build-stage-settings.js?v=20261020-single-checks"></script>
+          <script src="/public/js/build-stage-settings.js?v=20261119-preview-on"></script>
+          <div class="agent-card">
+            <div class="agent-card-head"><div><h3>Where builds and previews run</h3><p>Ticket builds and the preview can run in different places. A ticket's own Build with choice still wins for its build.</p></div></div>
+            <div class="cfg-fields">
+              <div class="cfg-field" style="max-width:340px;">
+                <span class="cfg-field-label">Build tickets</span>
+                <select class="cfg-select" id="cfg-run-on" data-field="runOn" disabled>
+                  <option value="computer">On each person's computer (LFG Desktop)</option>
+                  <option value="cloud">In an LFG sandbox</option>
+                  <option value="">Each person's own setting</option>
+                </select>
+              </div>
+              <div class="cfg-field" style="max-width:340px;">
+                <span class="cfg-field-label">Run the preview</span>
+                <select class="cfg-select" id="cfg-preview-on" data-field="previewOn" disabled>
+                  <option value="cloud">In an LFG sandbox</option>
+                  <option value="computer">On each person's computer (LFG Desktop)</option>
+                  <option value="">Each person's own setting</option>
+                </select>
+              </div>
+            </div>
+            <p id="cfg-run-on-status" role="status" style="font-size:12px;color:var(--text-secondary)"></p>
+          </div>
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
@@ -1843,7 +1865,7 @@ export function ProjectDetailPage({
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
   <script src="/public/js/board-sync.js"></script>
   <script></script>

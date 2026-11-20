@@ -24,7 +24,7 @@ export function MeetingBotsPage({ user, defaultAccount }: Props) {
   <title>Meeting bots — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <script src="/public/js/theme-switcher.js"></script>
   <style>
     body { background: var(--background-color, var(--body-bg)); color: var(--text-color); }

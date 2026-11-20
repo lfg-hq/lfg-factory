@@ -13,14 +13,16 @@
  * The server never sends shell commands, and every job can be declined.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import type { AgentEvent, AgentKind, ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
-import { isAgentEffort, isAgentModel } from "./protocol.ts";
+import { RUNNER_PROTOCOL_VERSION, isAgentEffort, isAgentModel } from "./protocol.ts";
+import { LocalPreview, PreviewStopped, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
+import { mustRun, run } from "./proc.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
 
@@ -39,6 +41,9 @@ export type SocketFactory = (url: string, headers: Record<string, string>) => So
 /** A build (or ticket follow-up) on a repository: the kind of job that asks first. */
 export type BuildJobOffer = Extract<RunnerJobOffer, { type: "claude_task" }>;
 
+/** Run the project's app on this computer for the Preview tab. */
+export type PreviewJobOffer = Extract<RunnerJobOffer, { type: "preview" }>;
+
 export type ApprovalResult = { approved: true } | { approved: false; reason?: string };
 
 export interface RunnerOptions {
@@ -49,6 +54,14 @@ export interface RunnerOptions {
   createSocket: SocketFactory;
   /** Ask the person whether to run this job. */
   approve(job: BuildJobOffer): Promise<ApprovalResult>;
+  /** Ask the person whether to run this app's commands for a preview. Absent: previews are declined. */
+  approvePreview?(job: PreviewJobOffer, commands: string[]): Promise<ApprovalResult>;
+  /** Docker Desktop is installed but stopped and a preview needs a database: ask to start it. */
+  askStartDocker?(info: { projectName: string; engine: string }): Promise<boolean>;
+  /** Ask before downloading a Node.js a preview needs. */
+  approveNodeDownload?(info: { projectName: string; version: string; reason: string; folder: string }): Promise<boolean>;
+  /** How long a preview's app gets to answer on its port. */
+  previewStartTimeoutMs?: number;
   /** Claude Code tools this computer allows. A job can only narrow this list. */
   allowedTools?: string[];
   /** Override an agent's executable (tests, or a CLI outside PATH). */
@@ -84,6 +97,11 @@ export class Runner {
   private serverPings = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   readonly active = new Map<string, ActiveJob>();
+  /** Running previews, one per project: project id → its job and processes. */
+  private readonly previews = new Map<string, { jobId: string; preview: LocalPreview; stopping?: Promise<void> }>();
+  /** Preview offers still being approved or waiting for the one they replace, and any cancelled meanwhile. */
+  private readonly previewOffers = new Set<string>();
+  private readonly cancelledOffers = new Set<string>();
   state: RunnerState = "disconnected";
 
   constructor(private readonly opts: RunnerOptions) {}
@@ -123,6 +141,7 @@ export class Runner {
     if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     if (this.retry) clearTimeout(this.retry);
     for (const job of this.active.values()) { job.cancelled = true; job.child?.kill("SIGTERM"); }
+    for (const p of this.previews.values()) void p.preview.stop();
     this.socket?.close(1000, "Runner stopped");
     this.setState("stopped");
   }
@@ -149,7 +168,7 @@ export class Runner {
     socket.onopen = async () => {
       this.agents ??= await detectAgents(this.opts.env ?? process.env, this.bins());
       const claude = this.agents.find(a => a.kind === "claude");
-      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()] });
+      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()], protocol: RUNNER_PROTOCOL_VERSION });
     };
     socket.onmessage = (ev) => { this.lastHeard = Date.now(); void this.handle(String(ev.data)); };
     socket.onerror = () => { /* onclose follows */ };
@@ -185,13 +204,21 @@ export class Runner {
       case "job.cancel": {
         const job = this.active.get(msg.jobId);
         if (job) { job.cancelled = true; job.child?.kill("SIGTERM"); }
+        if (this.previewOffers.has(msg.jobId)) this.cancelledOffers.add(msg.jobId);
+        for (const [key, p] of this.previews) {
+          if (p.jobId !== msg.jobId) continue;
+          p.stopping ??= p.preview.stop();
+          void p.stopping.then(() => { if (this.previews.get(key) === p) this.previews.delete(key); this.active.delete(p.jobId); });
+        }
         this.queue = this.queue.filter(j => j.id !== msg.jobId);
         return;
       }
       case "job.offer":
-        if (this.active.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
+        if (this.active.has(msg.job.id) || this.previewOffers.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
         // Chat turns answer right away, alongside any build: they don't touch repositories.
         if (msg.job.type === "chat_turn") { void this.runChatTurn(msg.job); return; }
+        // Previews run alongside builds, in their own folder.
+        if (msg.job.type === "preview") { void this.runPreview(msg.job); return; }
         if (msg.job.type !== "claude_task") return;
         this.queue.push(msg.job);
         void this.drain();
@@ -293,6 +320,73 @@ export class Runner {
     }
   }
 
+  /**
+   * Run a project's app here for the Preview tab, until it's stopped or replaced. Its
+   * progress, log and http://localhost address go back as job.preview updates.
+   */
+  private async runPreview(job: PreviewJobOffer) {
+    this.previewOffers.add(job.id);
+    try { await this.runPreviewOffer(job); } finally { this.previewOffers.delete(job.id); this.cancelledOffers.delete(job.id); }
+  }
+
+  private async runPreviewOffer(job: PreviewJobOffer) {
+    const p = job.payload;
+    const title = `Preview: ${p.projectName}`;
+    const decline = (reason: string) => {
+      this.send({ type: "job.rejected", jobId: job.id, reason });
+      this.opts.onJob?.({ jobId: job.id, title, phase: "declined", detail: reason });
+    };
+    const problem = validatePreviewPayload(p, !!this.opts.allowLocalRepos);
+    if (problem) return decline(problem);
+    if (!this.opts.approvePreview) return decline("This computer doesn't run previews.");
+    const decision = await this.opts.approvePreview(job, previewCommands(p.plan)).catch(() => ({ approved: false as const, reason: "Approval failed" }));
+    if (!decision.approved) return decline(decision.reason ?? "Declined on this computer");
+
+    // One preview per project here: the one it replaces must be gone (ports, files) first.
+    const key = previewFolderName(p.projectId);
+    const previous = this.previews.get(key);
+    if (previous) { await (previous.stopping ??= previous.preview.stop()); this.active.delete(previous.jobId); }
+    if (this.cancelledOffers.has(job.id)) return; // stopped or replaced while the person was deciding
+
+    const active: ActiveJob = { cancelled: false };
+    this.active.set(job.id, active);
+    this.send({ type: "job.accepted", jobId: job.id });
+    const preview = new LocalPreview(p, {
+      workRoot: this.opts.workRoot,
+      env: this.opts.env ?? process.env,
+      allowLocalRepos: this.opts.allowLocalRepos,
+      startTimeoutMs: this.opts.previewStartTimeoutMs,
+      askStartDocker: this.opts.askStartDocker ? info => this.opts.askStartDocker!({ ...info, projectName: p.projectName }) : undefined,
+      approveNodeDownload: this.opts.approveNodeDownload ? info => this.opts.approveNodeDownload!({ ...info, projectName: p.projectName }) : undefined,
+      update: update => this.send({ type: "job.preview", jobId: job.id, update }),
+    });
+    const entry: { jobId: string; preview: LocalPreview; stopping?: Promise<void> } = { jobId: job.id, preview };
+    this.previews.set(key, entry);
+    const current = () => this.previews.get(key) === entry && !active.cancelled;
+    const finish = (error: string) => {
+      if (this.previews.get(key) === entry) this.previews.delete(key);
+      this.active.delete(job.id);
+      if (active.cancelled) return;
+      this.send({ type: "job.preview", jobId: job.id, update: { status: "error", error: error.slice(0, 2000) } });
+      this.send({ type: "job.finished", jobId: job.id, ok: false, error: error.slice(0, 2000) });
+      this.opts.onJob?.({ jobId: job.id, title, phase: "failed", detail: error });
+    };
+    preview.onExit(error => { if (current()) { void preview.stop(); finish(error); } });
+    try {
+      const urls = await preview.start();
+      if (!current()) { await preview.stop(); return; }
+      this.opts.onJob?.({ jobId: job.id, title, phase: "started", detail: `Running at ${urls.map(u => u.url).join(", ")}` });
+    } catch (error) {
+      await (entry.stopping ??= preview.stop());
+      if (error instanceof PreviewStopped || active.cancelled) {
+        if (this.previews.get(key) === entry) this.previews.delete(key);
+        this.active.delete(job.id);
+        return;
+      }
+      finish(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   private bins(): Partial<Record<AgentKind, string>> {
     return { ...(this.opts.claudeBin ? { claude: this.opts.claudeBin } : {}), ...this.opts.agentBins };
   }
@@ -321,7 +415,7 @@ interface TaskContext {
 }
 
 export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
-  : Promise<{ branch: string; commitSha: string | null; summary?: string }> {
+  : Promise<{ branch: string; commitSha: string | null; summary?: string; mergeSha?: string; mergeError?: string }> {
   const p = job.payload;
   const repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));
   const worktree = join(ctx.workRoot, "worktrees", p.branch.replace(/[^A-Za-z0-9._-]+/g, "-"));
@@ -373,40 +467,93 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   });
   check();
 
+  const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
+    ? [] : ["-c", "user.name=LFG Desktop", "-c", "user.email=lfg-desktop@localhost"];
   if ((await git(["status", "--porcelain"], worktree)).trim()) {
-    const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
-      ? [] : ["-c", "user.name=LFG Desktop", "-c", "user.email=lfg-desktop@localhost"];
     await git(["add", "-A"], worktree);
     await git([...identity, "commit", "-m", p.commitMessage || "LFG Desktop changes"], worktree);
   }
   const head = (await git(["rev-parse", "HEAD"], worktree)).trim();
-  if (head === base) return { branch: p.branch, commitSha: null, summary };
-  check();
-  ctx.progress(`Pushing ${p.branch}…`);
-  await git(["push", "-u", "origin", `HEAD:refs/heads/${p.branch}`], worktree);
-  return { branch: p.branch, commitSha: head, summary };
+  let commitSha: string | null = null;
+  if (head !== base) {
+    check();
+    ctx.progress(`Pushing ${p.branch}…`);
+    await git(["push", "-u", "origin", `HEAD:refs/heads/${p.branch}`], worktree);
+    commitSha = head;
+  }
+  // Land the ticket branch on its epic branch, like a cloud build does. Runs even
+  // when this run changed nothing, so earlier unmerged work on the branch lands too.
+  const merge = await mergeIntoTarget(p, { ...ctx, repoDir, identity, check, tools });
+  return { branch: p.branch, commitSha, summary, ...merge };
 }
 
-// ── Processes ────────────────────────────────────────────────────────
-
-interface RunOpts { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
-
-export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...(opts.env ?? process.env), GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", d => { stdout += d; });
-    child.stderr.on("data", d => { stderr += d; });
-    const timer = opts.timeoutMs ? setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs) : null;
-    child.on("error", e => { if (timer) clearTimeout(timer); reject(e); });
-    child.on("close", code => { if (timer) clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }); });
-  });
+/** Merge the pushed ticket branch into `p.mergeInto` and push it. Conflicts go to the agent once. */
+export async function mergeIntoTarget(p: ClaudeTaskPayload, ctx: TaskContext & {
+  repoDir: string; identity: string[]; check(): void; tools: string[];
+}): Promise<{ mergeSha?: string; mergeError?: string }> {
+  const target = p.mergeInto;
+  if (!target || target === p.branch || !REF.test(target)) return {};
+  const git = (args: string[], cwd = ctx.repoDir) => mustRun("git", args, { cwd, env: ctx.env, timeoutMs: 10 * 60_000 }, `git ${args[0]}`);
+  const tryGit = (args: string[], cwd: string) => run("git", args, { cwd, env: ctx.env, timeoutMs: 10 * 60_000 });
+  const source = `refs/remotes/origin/${p.branch}`;
+  const wt = join(ctx.workRoot, "worktrees", `merge-${target.replace(/[^A-Za-z0-9._-]+/g, "-")}`);
+  const dropWorktree = async () => {
+    if (existsSync(wt)) await run("git", ["worktree", "remove", "--force", wt], { cwd: ctx.repoDir, env: ctx.env });
+    rmSync(wt, { recursive: true, force: true });
+    await run("git", ["worktree", "prune"], { cwd: ctx.repoDir, env: ctx.env });
+  };
+  try {
+    // The target can move while we merge (another ticket landing): fetch and retry once.
+    for (let round = 0; round < 2; round++) {
+      ctx.check();
+      await git(["fetch", "--prune", "origin"]);
+      if ((await tryGit(["rev-parse", "--verify", "--quiet", source], ctx.repoDir)).code !== 0) return {};
+      const targetRef = `refs/remotes/origin/${target}`;
+      const targetExists = (await tryGit(["rev-parse", "--verify", "--quiet", targetRef], ctx.repoDir)).code === 0;
+      if (targetExists && (await tryGit(["merge-base", "--is-ancestor", source, targetRef], ctx.repoDir)).code === 0) {
+        return { mergeSha: (await git(["rev-parse", targetRef])).trim() }; // already on the epic branch
+      }
+      await dropWorktree();
+      // A missing epic branch starts as the ticket branch (which was cut from the epic's base).
+      await git(["worktree", "add", "--detach", wt, targetExists ? targetRef : source]);
+      if (targetExists) {
+        ctx.progress(`Merging ${p.branch} into ${target}…`);
+        const merged = await tryGit([...ctx.identity, "merge", "--no-ff", "-m", `Merge ${p.branch} into ${target}`, source], wt);
+        if (merged.code !== 0) {
+          const conflicts = (await tryGit(["diff", "--name-only", "--diff-filter=U"], wt)).stdout.trim();
+          if (!conflicts) throw new Error(`git merge failed: ${(merged.stderr || merged.stdout).trim().slice(0, 300)}`);
+          ctx.progress(`Merge conflicts in ${conflicts.split("\n").join(", ")}. Asking ${AGENTS[ctx.agent].label} to resolve them…`);
+          await runAgent(ctx.agent, {
+            prompt: [
+              `Merging ticket branch ${p.branch} into ${target} hit conflicts in:`, conflicts, "",
+              "Resolve every conflict so both sides' intent is kept, remove all conflict markers, and make sure the code still builds.",
+              "Do not commit, push, abort the merge or switch branches. LFG Desktop finishes the merge.",
+            ].join("\n"),
+            cwd: wt, allowedTools: ctx.tools, maxTurns: 40, env: ctx.env, bin: ctx.bin,
+            onEvent: ctx.agentEvent,
+          });
+          ctx.check();
+          await git(["add", "-A"], wt);
+          const left = (await tryGit(["diff", "--cached", "--name-only", "-G", "^(<<<<<<<|>>>>>>>) ", "HEAD"], wt)).stdout.trim();
+          if (left) { await tryGit(["merge", "--abort"], wt); throw new Error(`conflicts left unresolved in ${left.split("\n").join(", ")}`); }
+          await git([...ctx.identity, "commit", "--no-edit"], wt);
+        }
+      }
+      ctx.check();
+      ctx.progress(`Pushing ${target}…`);
+      const pushed = await tryGit(["push", "origin", `HEAD:refs/heads/${target}`], wt);
+      if (pushed.code === 0) return { mergeSha: (await git(["rev-parse", "HEAD"], wt)).trim() };
+      if (round === 1) throw new Error(`push to ${target} was rejected: ${(pushed.stderr || pushed.stdout).trim().slice(0, 300)}`);
+    }
+    return {};
+  } catch (error) {
+    if ((error as Error).message === "Cancelled") throw error;
+    return { mergeError: `Couldn't merge ${p.branch} into ${target}: ${(error as Error).message}` };
+  } finally {
+    await dropWorktree().catch(() => {});
+  }
 }
 
-async function mustRun(cmd: string, args: string[], opts: RunOpts, label: string): Promise<string> {
-  const r = await run(cmd, args, opts);
-  if (r.code !== 0) throw new Error(`${label} failed: ${(r.stderr || r.stdout).trim().slice(-800)}`);
-  return r.stdout;
-}
+export { run } from "./proc.ts";
 
 export const defaultWorkRoot = () => join(os.homedir(), "LFG");

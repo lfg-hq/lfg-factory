@@ -135,6 +135,41 @@ test("a ticket started on the server is built and pushed by the person's compute
   expect(logs.some(l => l.startsWith("Pushed "))).toBe(true);
 });
 
+test("a preview started on the server runs the app on the person's computer and stops there", async () => {
+  const { setLocalAiSettings } = await import("../src/services/runner/opt-in.ts");
+  const { projectEnvironments } = await import("../src/db/schema/project-environments.ts");
+  const preview = await import("../src/services/runner/preview-job.ts");
+  await setLocalAiSettings("erin", { enabled: true });
+  // The app: a tiny server on a free port, committed to the default branch.
+  const port = await new Promise<number>(r => { const s = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } }); const p = s.port; s.stop(); r(p); });
+  const seed = join(root, "seed");
+  writeFileSync(join(seed, "server.cjs"), `require("http").createServer((q, r) => r.end("hello from the computer")).listen(Number(process.env.PORT), process.env.HOST);\n`);
+  sh(["git", "add", "-A"], seed); sh(["git", "commit", "-m", "app"], seed); sh(["git", "push", "origin", "HEAD:main"], seed);
+  await db.insert(projects).values({ id: "e2e-pv", projectId: "pub-e2e-pv", name: "Previewed", ownerId: "erin", repoUrl: `file://${bare}` });
+  await db.insert(projectEnvironments).values({ projectId: "e2e-pv", workspaceId: "none", setupManifest: JSON.stringify({ runCmd: "node server.cjs", port, databases: [], installCmd: "" }) } as any);
+
+  const states: string[] = [];
+  const runner = new Runner({
+    serverUrl: `http://localhost:${server.port}`, token, workRoot: join(root, "work-preview"),
+    createSocket: bunSockets, claudeBin: fakeClaude, allowLocalRepos: true,
+    approve: async () => ({ approved: false }), approvePreview: async () => ({ approved: true }),
+    onState: s => states.push(s),
+  });
+  runner.start();
+  await waitFor(async () => states.includes("connected"));
+  expect((await preview.resolvePreviewWhere("erin")).where).toBe("computer");
+  await preview.startLocalPreview({ projectId: "e2e-pv", userId: "erin", branch: null, refresh: true });
+  const live = await waitFor(async () => { const s = await preview.localPreviewState("erin", "e2e-pv"); return s.previewStatus === "running" ? s : null; }, 30_000);
+  expect(live.previewUrl).toBe(`http://localhost:${port}`);
+  expect(await (await fetch(live.previewUrl!)).text()).toBe("hello from the computer");
+  expect(live.steps.map(s => s.id)).toEqual(["code", "start-web"]);
+
+  await preview.stopLocalPreview("erin", "e2e-pv");
+  await waitFor(async () => (await fetch(live.previewUrl!).then(() => false, () => true)) || null);
+  expect((await preview.localPreviewState("erin", "e2e-pv")).previewStatus).toBe("stopped");
+  runner.stop();
+});
+
 test("a wrong token is told it's unauthorized and stops retrying", async () => {
   const states: string[] = [];
   const runner = new Runner({

@@ -10,8 +10,9 @@
  * safeStorage), this computer's device id, and the "don't ask again" project list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { Runner, defaultWorkRoot, type RunnerState } from "./runner.ts";
 import { nodeSocketFactory } from "./socket.ts";
 import { signInWithBrowser, SignInCancelled } from "./browser-signin.ts";
-import type { BuildJobOffer } from "./runner.ts";
+import type { BuildJobOffer, PreviewJobOffer } from "./runner.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +32,8 @@ interface Config {
   email?: string;
   /** Projects whose jobs run without asking. */
   trustedProjects?: string[];
+  /** Previews that run without asking: project + a hash of the exact commands approved. */
+  trustedPreviews?: string[];
   workRoot?: string;
 }
 
@@ -90,6 +93,10 @@ function ensureWindow(): BrowserWindow {
   // The website's sign-in pages mean "not signed in here": show the app's own sign-in.
   const isSignInPage = (url: URL) => url.origin === origin() && /^\/auth\/(login|register)\/?$/.test(url.pathname);
   const guard = (event: Electron.Event, raw: string) => {
+    // Only the app's own page. will-redirect also fires for frames inside it: the Preview
+    // panel's iframe of the app being built redirects (e.g. to its /login), and treating that
+    // as leaving LFG blanked the panel and opened the preview in the browser instead.
+    if ((event as { isMainFrame?: boolean }).isMainFrame === false) return;
     let url: URL;
     try { url = new URL(raw); } catch { return; }
     if (url.protocol === "file:") return;
@@ -122,6 +129,33 @@ function showWorkspace(path = "/projects") {
   void win.loadURL(`${origin()}${path}`);
   win.show();
   win.focus();
+}
+
+/**
+ * Let the LFG server's pages use the microphone (dictation, voice mode), never the camera or other sites.
+ * On macOS the first use asks the system for microphone access, so the user sees the
+ * normal "LFG would like to access the microphone" prompt instead of a silent failure.
+ */
+const isLocal = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
+
+function allowMicrophoneForServer() {
+  const fromServer = (url: string) => !!config.serverUrl && (url === origin() || url.startsWith(origin() + "/"));
+  const audioOnly = (details: { mediaTypes?: string[] }) => (details.mediaTypes ?? ["audio"]).every((t) => t === "audio");
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const url = details.requestingUrl ?? wc.getURL();
+    // Previews on this computer: an LFG page showing the app at http://localhost:<port> needs
+    // Chromium's local-network permission. The request can name the frame (localhost), so judge
+    // it by the page the frame sits in.
+    if (/local-network|private-network/i.test(permission)) { callback(fromServer(wc.getURL()) || fromServer(url)); return; }
+    // Anything else keeps Electron's default for LFG's own pages; other sites get nothing.
+    if (permission !== "media") { callback(fromServer(url)); return; }
+    if (!fromServer(url) || !audioOnly(details as { mediaTypes?: string[] })) { callback(false); return; }
+    if (process.platform !== "darwin" || systemPreferences.getMediaAccessStatus("microphone") === "granted") { callback(true); return; }
+    systemPreferences.askForMediaAccess("microphone").then(callback, () => callback(false));
+  });
+  session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
+    /local-network|private-network/i.test(permission) ? fromServer(wc?.getURL() ?? "") || fromServer(requestingOrigin) || isLocal(requestingOrigin)
+      : permission !== "media" || fromServer(requestingOrigin));
 }
 
 /** Mark requests to the LFG server as coming from the app, so it skips the marketing site. */
@@ -216,6 +250,63 @@ async function approve(job: BuildJobOffer) {
   return { approved: true as const };
 }
 
+/**
+ * A preview runs the app's own commands (install, build, start) from the project's saved
+ * plan. Ask before the first run, and again whenever those commands change.
+ */
+async function approvePreview(job: PreviewJobOffer, commands: string[]) {
+  const p = job.payload;
+  const key = `${p.projectId}:${createHash("sha256").update(JSON.stringify([p.repoUrl, commands])).digest("hex").slice(0, 16)}`;
+  if (config.trustedPreviews?.includes(key)) return { approved: true as const };
+  const listed = commands.length
+    ? `It will run:\n${commands.map(c => `  ${c}`).join("\n").slice(0, 1200)}`
+    : "LFG has no saved plan for this app yet, so LFG Desktop will work out how to run it from the repository (package.json, manage.py or Gemfile).";
+  const { response, checkboxChecked } = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Run on this computer", "Decline"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `Run ${p.projectName} on this computer?`,
+    detail: `${p.label}\nRepository: ${p.repoUrl}\nFolder: ${join(config.workRoot ?? defaultWorkRoot(), "previews")}\n\n${listed}\n\n` +
+      "The app only listens on this computer (localhost). Stop it any time from the Preview tab.",
+    checkboxLabel: "Don't ask again for these commands",
+  });
+  if (response !== 0) return { approved: false as const, reason: "Declined on this computer" };
+  if (checkboxChecked) {
+    config.trustedPreviews = [...new Set([...(config.trustedPreviews ?? []), key])].slice(-200);
+    saveConfig();
+  }
+  return { approved: true as const };
+}
+
+/** A preview needs a database and Docker Desktop is installed but not running: ask to start it. */
+async function askStartDocker(info: { projectName: string; engine: string }) {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Start Docker Desktop", "Not now"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `${info.projectName} needs ${info.engine}`,
+    detail: `LFG runs ${info.engine} for previews in Docker, in its own container, so your own databases aren't touched. Docker Desktop is installed but not running.\n\nLFG Desktop will open Docker Desktop and continue once it's ready.`,
+  });
+  return response === 0;
+}
+
+/** A preview needs a Node.js this computer doesn't have: ask before downloading it from nodejs.org. */
+async function approveNodeDownload(info: { projectName: string; version: string; reason: string; folder: string }) {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    buttons: [`Download Node.js ${info.version}`, "Not now"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `${info.projectName} needs Node.js ${info.version}`,
+    detail: `${info.reason.charAt(0).toUpperCase()}${info.reason.slice(1)}, and no Node.js on this computer fits.\n\n` +
+      `LFG Desktop can download the official Node.js ${info.version} from nodejs.org (about 50 MB, checked against nodejs.org's checksums) into:\n${info.folder}\n\n` +
+      "It's used only for LFG previews; your own Node.js setup isn't changed.",
+  });
+  return response === 0;
+}
+
 function startRunner() {
   runner?.stop();
   runner = null;
@@ -231,13 +322,16 @@ function startRunner() {
     env: shellEnv,
     appVersion: app.getVersion(),
     approve,
+    approvePreview,
+    approveNodeDownload,
+    askStartDocker,
     onState: (state, detail) => {
       runnerStatus = { state, detail };
       refreshTray();
       if (state === "unauthorized") showSignIn("This computer was disconnected from LFG. Sign in again to reconnect it.");
     },
     onJob: (e) => {
-      const body = e.phase === "started" ? "Started on this computer"
+      const body = e.phase === "started" ? (e.detail ?? "Started on this computer")
         : e.phase === "finished" ? (e.detail ?? "Done")
         : e.phase === "failed" ? `Failed: ${e.detail ?? ""}`.slice(0, 200)
         : e.phase === "cancelled" ? "Cancelled" : `Declined${e.detail ? `: ${e.detail}` : ""}`;
@@ -270,7 +364,7 @@ function refreshTray() {
   if (process.platform === "darwin") tray.setTitle(busy ? `LFG ●${busy}` : runnerStatus.state === "connected" ? "LFG" : "LFG ○");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: statusLabel(), enabled: false },
-    ...(busy ? [{ label: `${busy} job running`, enabled: false }] : []),
+    ...(busy ? [{ label: `${busy} running (builds and previews)`, enabled: false }] : []),
     { type: "separator" },
     { label: "Open LFG", click: () => showWorkspace() },
     ...(signedIn ? [{ label: "Open LFG in your browser", click: () => { void shell.openExternal(`${origin()}/projects`); } }] : []),
@@ -291,9 +385,10 @@ if (!app.requestSingleInstanceLock()) {
     shellEnv = loginShellEnv();
     config = loadConfig();
     // Signed in to a different server before (e.g. a local test one): start over.
-    if (config.serverUrl && config.serverUrl !== SERVER_URL) config = { trustedProjects: config.trustedProjects };
+    if (config.serverUrl && config.serverUrl !== SERVER_URL) config = { trustedProjects: config.trustedProjects, trustedPreviews: config.trustedPreviews };
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
     tagServerRequests();
+    allowMicrophoneForServer();
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();

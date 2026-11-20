@@ -18,8 +18,9 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
+import { emit } from "../../events/bus.ts";
 import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
-import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
+import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type PreviewPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
   deviceId: string;
@@ -91,6 +92,18 @@ export async function revokeRunnerDevice(userId: string, deviceId: string): Prom
 
 export const isDeviceConnected = (deviceId: string) => conns.has(deviceId);
 export const userHasConnectedRunner = (userId: string) => [...conns.values()].some(c => c.userId === userId);
+
+// The protocol each connected computer speaks (from its hello; older runners don't say: 2).
+const connProtocol = new WeakMap<RunnerConn, number>();
+const protocolOf = (conn: RunnerConn) => connProtocol.get(conn) ?? 2;
+/** Jobs only some runners understand, and the protocol they need. */
+const NEEDS_PROTOCOL: Record<string, number> = { preview: 3 };
+const canRun = (conn: RunnerConn, type: string) => protocolOf(conn) >= (NEEDS_PROTOCOL[type] ?? 0);
+
+/** This person's most recently connected computer that speaks at least `minProtocol`. */
+export function connectedRunnerFor(userId: string, minProtocol = 0): RunnerConn | null {
+  return [...conns.values()].filter(c => c.userId === userId && protocolOf(c) >= minProtocol).at(-1) ?? null;
+}
 
 // ── Connection lifecycle ─────────────────────────────────────────────
 
@@ -167,6 +180,7 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
 
   if (msg.type === "pong") return;
   if (msg.type === "hello") {
+    if (typeof msg.protocol === "number") connProtocol.set(conn, msg.protocol);
     await db.update(runnerDevices).set({
       lastSeenAt: new Date(),
       platform: msg.platform?.slice(0, 40) ?? null,
@@ -195,6 +209,7 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       if (job.status !== "offered") return;
       await db.update(runnerJobs).set({ status: "running", startedAt: new Date() }).where(eq(runnerJobs.id, job.id));
       notify(job.id, { type: "accepted", deviceName: conn.deviceName });
+      if (job.type === "preview") { await (await previews()).previewJobChanged({ ...job, status: "running" }, { type: "accepted", deviceName: conn.deviceName }); return; }
       await ticketUpdate(job, { status: "in_progress", queueStatus: "executing" },
         `Running on ${conn.deviceName} with ${agentLabel(job)}.`);
       return;
@@ -204,6 +219,7 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       await db.update(runnerJobs).set({ status: "rejected", error: msg.reason?.slice(0, 500) ?? null, finishedAt: new Date() })
         .where(eq(runnerJobs.id, job.id));
       notify(job.id, { type: "rejected", reason: msg.reason });
+      if (job.type === "preview") { await (await previews()).previewJobChanged(job, { type: "rejected", reason: msg.reason }); return; }
       await ticketUpdate(job, { status: "open", queueStatus: "none" },
         `${conn.deviceName} declined this job${msg.reason ? `: ${msg.reason.slice(0, 300)}` : "."}`);
       return;
@@ -227,6 +243,10 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       await logNormalizedEvent(job, msg.event);
       return;
     }
+    case "job.preview": {
+      if (job.type === "preview" && msg.update && typeof msg.update === "object") await (await previews()).applyPreviewUpdate(job, msg.update);
+      return;
+    }
     case "job.agent_event": {
       if (job.status === "running" && msg.event && typeof msg.event === "object") await logAgentEvent(job, msg.event);
       return;
@@ -238,6 +258,9 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
   }
 }
 
+// Loaded on first use: preview-job imports this module.
+const previews = () => import("./preview-job.ts");
+
 async function jobForDevice(jobId: string, deviceId: string) {
   const [job] = await db.select().from(runnerJobs).where(and(eq(runnerJobs.id, jobId), eq(runnerJobs.deviceId, deviceId))).limit(1);
   return job ?? null;
@@ -247,7 +270,8 @@ async function jobForDevice(jobId: string, deviceId: string) {
 
 export async function enqueueJob(input:
   | { userId: string; projectId: string; ticketId: string | null; type?: "claude_task"; payload: ClaudeTaskPayload }
-  | { userId: string; projectId: string; ticketId?: null; conversationId: string; type: "chat_turn"; payload: ChatTurnPayload }) {
+  | { userId: string; projectId: string; ticketId?: null; conversationId: string; type: "chat_turn"; payload: ChatTurnPayload }
+  | { userId: string; projectId: string; ticketId?: null; type: "preview"; payload: PreviewPayload }) {
   const [job] = await db.insert(runnerJobs).values({
     userId: input.userId,
     projectId: input.projectId,
@@ -256,7 +280,7 @@ export async function enqueueJob(input:
     type: input.type ?? "claude_task",
     payload: JSON.stringify(input.payload),
     branch: "branch" in input.payload ? input.payload.branch : null,
-    agent: input.payload.agent ?? "claude",
+    agent: "agent" in input.payload ? input.payload.agent ?? "claude" : null,
   }).returning();
   await dispatchQueued(input.userId);
   const [fresh] = await db.select().from(runnerJobs).where(eq(runnerJobs.id, job!.id)).limit(1);
@@ -265,17 +289,19 @@ export async function enqueueJob(input:
 
 /** Offer this user's queued jobs, oldest first, to one of their connected devices. */
 export async function dispatchQueued(userId: string): Promise<void> {
-  const conn = [...conns.values()].filter(c => c.userId === userId).at(-1);
-  if (!conn) return;
+  if (!connectedRunnerFor(userId)) return;
   const queued = await db.select().from(runnerJobs)
     .where(and(eq(runnerJobs.userId, userId), eq(runnerJobs.status, "queued")))
     .orderBy(asc(runnerJobs.createdAt));
   for (const job of queued) {
+    // A job some computers can't run (a preview on an older LFG Desktop) waits for one that can.
+    const conn = connectedRunnerFor(userId, NEEDS_PROTOCOL[job.type] ?? 0);
+    if (!conn || !canRun(conn, job.type)) continue;
     const claimed = await db.update(runnerJobs).set({ status: "offered", deviceId: conn.deviceId })
       .where(and(eq(runnerJobs.id, job.id), eq(runnerJobs.status, "queued")))
       .returning({ id: runnerJobs.id });
     if (!claimed.length) continue;
-    conn.send({ type: "job.offer", job: { id: job.id, type: job.type === "chat_turn" ? "chat_turn" : "claude_task", payload: JSON.parse(job.payload) } as never });
+    conn.send({ type: "job.offer", job: { id: job.id, type: job.type === "chat_turn" || job.type === "preview" ? job.type : "claude_task", payload: JSON.parse(job.payload) } as never });
     notify(job.id, { type: "offered", deviceName: conn.deviceName });
     await logToTicket(job, `Sent to ${conn.deviceName}. Waiting for it to start.`, "agent_progress");
   }
@@ -302,12 +328,13 @@ export async function cancelTicketJobs(ticketId: string): Promise<number> {
 }
 
 async function finishJob(jobId: string, deviceId: string,
-  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }): Promise<void> {
+  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }): Promise<void> {
   clearTimeout(lostTimers.get(jobId)); lostTimers.delete(jobId);
   const updated = await db.update(runnerJobs).set({
     status: result.ok ? "succeeded" : "failed",
     commitSha: result.commitSha?.slice(0, 64) ?? null,
-    summary: result.summary?.slice(0, 4000) ?? null,
+    // A preview keeps its state in summary; a finish without a summary leaves it alone.
+    ...(result.summary !== undefined ? { summary: result.summary.slice(0, 4000) } : {}),
     error: result.error?.slice(0, 2000) ?? null,
     ...(result.sessionId ? { agentSession: result.sessionId.slice(0, 200) } : {}),
     finishedAt: new Date(),
@@ -317,9 +344,11 @@ async function finishJob(jobId: string, deviceId: string,
   if (!job) return; // cancelled, or already finished
   for (const key of toolRows.keys()) if (key.startsWith(`${jobId}:`)) toolRows.delete(key);
   notify(jobId, { type: "finished", ok: result.ok, summary: result.summary, error: result.error, sessionId: result.sessionId ?? job.agentSession ?? undefined });
+  if (job.type === "preview") { await (await previews()).previewJobChanged(job, { type: "finished", ok: result.ok, error: result.error }); return; }
 
   if (!result.ok) {
     await ticketUpdate(job, { status: "failed", queueStatus: "none" }, `Build on your computer failed: ${result.error ?? "unknown error"}`, "cli_error");
+    buildFinished(job, "failed");
     return;
   }
   const pushed = !!result.commitSha;
@@ -330,6 +359,42 @@ async function finishJob(jobId: string, deviceId: string,
     pushed
       ? `Pushed ${(result.commitSha ?? "").slice(0, 7)} to ${result.branch ?? job.branch}.`
       : `${agentLabel(job)} finished without changing any files.`);
+  await recordMerge(job, result);
+  buildFinished(job, pushed ? "complete" : "failed");
+}
+
+/** The computer merged (or couldn't merge) the ticket branch into its epic branch. */
+async function recordMerge(job: typeof runnerJobs.$inferSelect, result: { mergeSha?: string; mergeError?: string }) {
+  if (!job.ticketId || (!result.mergeSha && !result.mergeError)) return;
+  let target = "the epic branch";
+  try { target = (JSON.parse(job.payload) as { mergeInto?: string }).mergeInto ?? target; } catch { /* keep the default */ }
+  if (result.mergeSha) {
+    await db.update(projectTickets).set({ githubMergeStatus: "merged", githubMergeCommitSha: result.mergeSha.slice(0, 64), updatedAt: new Date() })
+      .where(eq(projectTickets.id, job.ticketId));
+    await logToTicket(job, `Merged into ${target} (${result.mergeSha.slice(0, 7)}).`, "command");
+    const [ticket] = await db.select({ epicId: projectTickets.epicId }).from(projectTickets).where(eq(projectTickets.id, job.ticketId)).limit(1);
+    if (ticket?.epicId) {
+      const { maybeSubmitEpicForReview } = await import("../epics.ts");
+      await maybeSubmitEpicForReview(ticket.epicId).catch(e => console.warn("[runner] epic review hand-off failed:", (e as Error).message));
+    }
+  } else {
+    await db.update(projectTickets).set({ githubMergeStatus: "merge_failed", updatedAt: new Date() }).where(eq(projectTickets.id, job.ticketId));
+    await logToTicket(job, `${result.mergeError} The ticket's work is saved on its branch; use Push & Merge on the ticket to try again.`, "cli_error");
+  }
+  const ownerId = await projectOwner(job.projectId);
+  for (const userId of new Set([ownerId, job.userId].filter(Boolean) as string[])) {
+    broadcastToUser(userId, { type: "ticket_status", ticketId: job.ticketId, mergeStatus: result.mergeSha ? "merged" : "merge_failed" });
+  }
+}
+
+/** A ticket build on a computer finished: report it like a cloud build, so a build run moves on. */
+function buildFinished(job: typeof runnerJobs.$inferSelect, status: "complete" | "failed") {
+  if (!job.ticketId || job.type === "chat_turn") return;
+  let build = false;
+  try { build = !!(JSON.parse(job.payload) as { build?: boolean }).build; } catch { /* not a build */ }
+  if (!build) return;
+  const durationMs = job.startedAt ? Date.now() - job.startedAt.getTime() : undefined;
+  emit({ type: "ticket.execution_finished", ticketId: job.ticketId, projectId: job.projectId, status, exitCode: status === "complete" ? 0 : 1, durationMs });
 }
 
 // ── Ticket side effects ──────────────────────────────────────────────

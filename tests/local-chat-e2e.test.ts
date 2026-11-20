@@ -138,7 +138,7 @@ test("the agent on the computer answers, and what it creates is saved in LFG", a
   const result = events.find(e => e.type === "tool-result");
   expect(result.toolName).toBe("createTickets");
   expect(typeof result.output).toBe("object"); // JSON from the tool, parsed back
-  expect(statuses.some(s => /Claude Code on Ana's Mac is working/.test(s))).toBe(true);
+  expect(statuses.some(s => /^Claude Code is working/.test(s))).toBe(true);
   const tickets = await db.select().from(projectTickets);
   expect(tickets.map(t => [t.projectId, t.name])).toEqual([["p", "Add login"]]);
 });

@@ -1098,22 +1098,26 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
   if (!access) return c.json({ files: [], total: 0, pages: 1 });
   const project = access.project;
 
-  const fileRows = await db
-    .select()
-    .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
-    .orderBy(desc(projectFiles.updatedAt));
-
-  // Which epics each doc feeds. A doc can serve several epics (the Main PRD
-  // usually does), and it is never removed from this list by being linked.
-  const linksByFile = await epicLinksForDocs(project.id).catch(
-    () => ({} as Awaited<ReturnType<typeof epicLinksForDocs>>)
-  );
-  const epicRows = await db
-    .select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status, createdAt: epics.createdAt })
-    .from(epics)
-    .where(eq(epics.projectId, project.id))
-    .catch(() => []);
+  // Names and dates only: the list never shows content, and reading every document's
+  // body (design previews are whole HTML pages) made the Docs tab take seconds to open.
+  // Which epics each doc feeds: a doc can serve several (the Main PRD usually does), and
+  // it is never removed from this list by being linked.
+  const [fileRows, linksByFile, epicRows, uploads] = await Promise.all([
+    db.select({ id: projectFiles.id, name: projectFiles.name, fileType: projectFiles.fileType,
+      updatedAt: projectFiles.updatedAt, createdAt: projectFiles.createdAt })
+      .from(projectFiles)
+      .where(eq(projectFiles.projectId, project.id))
+      .orderBy(desc(projectFiles.updatedAt)),
+    epicLinksForDocs(project.id).catch(() => ({} as Awaited<ReturnType<typeof epicLinksForDocs>>)),
+    db.select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status, createdAt: epics.createdAt })
+      .from(epics)
+      .where(eq(epics.projectId, project.id))
+      .catch(() => []),
+    db.select({id:chatFiles.id,name:chatFiles.originalFilename,updated_at:chatFiles.uploadedAt,created_at:chatFiles.uploadedAt})
+      .from(chatFiles).innerJoin(conversations,eq(conversations.id,chatFiles.conversationId))
+      .where(and(eq(conversations.projectId,project.projectId),eq(conversations.userId,user.id)))
+      .orderBy(desc(chatFiles.uploadedAt)),
+  ]);
 
   const files = fileRows.map((f) => ({
     id: f.id,
@@ -1123,11 +1127,6 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     created_at: f.createdAt,
     epics: linksByFile[f.id] ?? [],
   }));
-
-  const uploads = await db.select({id:chatFiles.id,name:chatFiles.originalFilename,updated_at:chatFiles.uploadedAt,created_at:chatFiles.uploadedAt})
-    .from(chatFiles).innerJoin(conversations,eq(conversations.id,chatFiles.conversationId))
-    .where(and(eq(conversations.projectId,project.projectId),eq(conversations.userId,user.id)))
-    .orderBy(desc(chatFiles.uploadedAt));
   files.push(...uploads.map(f=>({...f,type:'upload',epics:[]})));
 
   return c.json({

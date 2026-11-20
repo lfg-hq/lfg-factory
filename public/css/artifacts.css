@@ -12,7 +12,9 @@
     transition: transform 0.3s ease;
     display: flex;
     flex-direction: column;
-    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4);
+    /* No shadow: hidden off the right edge, it still cast a dark band into the chat.
+       The left border separates it when open. */
+    box-shadow: none;
 }
 
 .artifacts-container.expanded {
@@ -4994,3 +4996,11 @@ body.ticket-modal-open {
 .note-form textarea { resize: vertical; font: inherit; font-size: 13px; }
 .note-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .note-clear { font-size: 12px; color: var(--text-secondary, #94a3b8); display: inline-flex; gap: 6px; align-items: center; }
+
+/* Docs and Tickets bring their own 16px inset. The panel's outer padding (16px) and the
+   pane's (15px) stacked on top of it left ~50px empty on each side and squeezed the list,
+   so these two panes drop both, as the Git tab does. */
+.artifacts-content:has(#filebrowser.active, #checklist.active) { padding: 0; }
+#filebrowser.tab-pane, #checklist.tab-pane { padding: 0; }
+#filebrowser .filebrowser-header { padding: 16px; }
+#checklist .checklist-container { padding: 4px 16px 16px !important; }

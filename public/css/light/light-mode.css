@@ -3647,7 +3647,7 @@ body[data-theme="light"] {
 [data-theme="light"] .markdown-content h2,
 [data-theme="light"] .markdown-content h3,
 [data-theme="light"] .markdown-content h4 {
-    color: #7c3aed !important;
+    color: #111827 !important;   /* headings are near-black; bold and size mark them, not colour */
 }
 
 [data-theme="light"] .markdown-content h1 {

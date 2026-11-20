@@ -1037,6 +1037,13 @@ const FRESH_SANDBOX_NOTE = `
 This sandbox was started fresh (the prepared preview could not be copied), so dependencies, build output and local settings are not installed. Install dependencies with the project's own install command (see package.json, README or lockfile) before building, running or testing. Do not commit generated files.`;
 
 // Concurrency guard: only one ticket per project at a time
+/** Codex models to try, in order, when the ChatGPT plan refuses the configured one. */
+export const CODEX_PLAN_FALLBACKS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"];
+/** OpenAI's answer when a ChatGPT account can't use a Codex model. */
+export const planRejectsModel = (text: string) => /model is not supported when using Codex with a ChatGPT account/i.test(text);
+/** OpenAI rejected the ChatGPT access token (revoked before its stated expiry). */
+export const tokenRejected = (text: string) => /authentication token has expired|token_expired|token has been invalidated|refresh_token_reused/i.test(text);
+
 const executingProjects = new Set<string>();
 // Per-ticket in-flight guard. Prevents the same ticket from executing twice
 // concurrently — from double-clicks, a retried queue after a UI error, the
@@ -1047,13 +1054,28 @@ const executingTickets = new Set<string>();
 
 // ── Subscriber Setup ──────────────────────────────────────────────────
 
-async function runsOnTheirComputer(userId: string): Promise<boolean> {
-  const { localAiSettings } = await import("../services/runner/opt-in.ts");
-  return (await localAiSettings(userId)).enabled;
+/** Where this person's build of this ticket runs: the ticket's own choice, else their setting. */
+async function buildTargetFor(ticketId: string, actorId: string | undefined) {
+  // A build queued without a person (a chat retry, the queue after a restart) belongs to
+  // whoever requested it, else the project owner. With nobody, it always went to the cloud,
+  // ignoring the project's "Build tickets: on each person's computer".
+  if (!actorId) {
+    const { getBuildOrigin } = await import("../services/build-reporting.ts");
+    actorId = (await getBuildOrigin(ticketId)).userId ?? undefined;
+  }
+  if (!actorId) {
+    const [owner] = await db.select({ ownerId: projects.ownerId }).from(projectTickets)
+      .innerJoin(projects, eq(projects.id, projectTickets.projectId)).where(eq(projectTickets.id, ticketId)).limit(1);
+    actorId = owner?.ownerId ?? undefined;
+  }
+  const { resolveBuildTarget, projectRunOn } = await import("../services/runner/build-target.ts");
+  const [row] = await db.select({ details: projectTickets.details, runOn: projects.runOn }).from(projectTickets)
+    .innerJoin(projects, eq(projects.id, projectTickets.projectId)).where(eq(projectTickets.id, ticketId)).limit(1);
+  return { ...(await resolveBuildTarget(actorId, row?.details, projectRunOn(row?.runOn))), actorId };
 }
 
 /** Hand a build or a ticket-chat follow-up to the person's own computer. */
-async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string }): Promise<void> {
+async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string; agent?: import("../services/runner/protocol.ts").AgentKind }): Promise<void> {
   const { startTicketOnRunner, RunnerJobError } = await import("../services/runner/ticket-job.ts");
   try {
     await startTicketOnRunner({ projectId, ticketId, actorId, ...opts });
@@ -1145,9 +1167,14 @@ export async function startTicketWorker() {
 
     // "Use my computer for AI": the person who started this build runs it on their own
     // computer (LFG Desktop + their agent), not in a cloud sandbox.
-    if (event.payload.actorId && projectId && await runsOnTheirComputer(event.payload.actorId)) {
-      await sendToTheirComputer(ticketId, projectId, event.payload.actorId, { notes: event.payload.notes, fromQueue: true });
+    const target: Awaited<ReturnType<typeof buildTargetFor>> = projectId ? await buildTargetFor(ticketId, event.payload.actorId) : { where: "cloud", actorId: undefined };
+    if (target.where === "computer" && target.actorId && projectId) {
+      await sendToTheirComputer(ticketId, projectId, target.actorId, { notes: event.payload.notes, fromQueue: true, agent: target.agent });
       return;
+    }
+    if (target.where === "cloud" && target.reason) {
+      const [owner] = projectId ? await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1) : [];
+      await addLog(ticketId, target.reason, "agent_progress", owner?.ownerId);
     }
 
     // Determine execution mode from user's applicationState
@@ -1278,10 +1305,11 @@ export async function startTicketWorker() {
     const { ticketId, message, sender, actorId, operationId } = event.payload;
     // "Use my computer for AI": the follow-up runs on the sender's computer, continuing
     // the agent's earlier session on this ticket.
-    if (actorId && await runsOnTheirComputer(actorId)) {
+    const chatTarget = actorId ? await buildTargetFor(ticketId, actorId) : null;
+    if (actorId && chatTarget?.where === "computer") {
       const projectId = await resolveProjectIdForTicket(ticketId);
       if (projectId) {
-        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message }));
+        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message, agent: chatTarget.agent }));
         return;
       }
     }
@@ -3537,7 +3565,8 @@ git branch --show-current
   let workSummary = ""; // Pi's "here's what I did" summary, for the completion message
 
   // Provider/native model id for the Pi in-sandbox coding agent (provider up top).
-  const piModelId = getProviderModel(modelKey) ?? modelKey;
+  let piModelId = getProviderModel(modelKey) ?? modelKey;
+  const triedModels = new Set<string>([piModelId]);
   const providerApiKey = provider
     ? ({
         anthropic: userKeys?.anthropicApiKey,
@@ -3623,6 +3652,8 @@ git branch --show-current
       // transient LOST-CONTACT/timeout is infra (not a build failure) so it retries
       // generously (MAX_INFRA_RESUMES); a real cut-short (OOM/runaway) gets the small
       // MAX_BUILD_RESUMES. Only after exhausting the relevant budget do we give up.
+      let forceTokenRefresh = false; // set once after OpenAI rejects the ChatGPT token
+      let tokenRefreshed = false;
       let attempt = 0;       // total resumes (drives the "continue" preface + settle)
       let infraResumes = 0;  // lost-contact / poll-timeout (transient) — generous budget
       let workResumes = 0;   // OOM / runaway (did work, cut short) — small budget
@@ -3642,8 +3673,10 @@ git branch --show-current
           // whether the token minted is how Pi ends up started with neither credential
           // ("an API key or OAuth access token is required") on a user who has a key.
           ...(await (async () => {
+            const force = forceTokenRefresh;
+            forceTokenRefresh = false;
             const tok = useOpenAICodex
-              ? await getOpenAICodexAccessToken(buildLlm.actorId).catch(async (e: Error) => {
+              ? await getOpenAICodexAccessToken(buildLlm.actorId, { force }).catch(async (e: Error) => {
                   await addLog(ticketId, `OpenAI Codex subscription token unavailable (${e.message?.slice(0, 120)})${providerApiKey ? " — using the stored API key instead" : ""}`, "command", ownerId).catch(() => {});
                   return undefined;
                 })
@@ -3711,6 +3744,33 @@ git branch --show-current
             : `⟳ Build didn't finish (${reason}) — resuming where it left off (attempt ${workResumes} of ${MAX_BUILD_RESUMES})…`, "command", ownerId);
           await sleep(2500); // let the VM settle after the kill
           continue;
+        }
+
+        // The ChatGPT plan doesn't offer every Codex model on every account. When OpenAI says
+        // so, start over on the next model it does offer instead of failing the build.
+        const fallback = useOpenAICodex && planRejectsModel(`${reason}\n${piResult.tail.slice(-4000)}`)
+          ? CODEX_PLAN_FALLBACKS.find((m) => !triedModels.has(m))
+          : undefined;
+        if (fallback) {
+          await killPiInVm(workspaceId, pi.backgroundPid);
+          await addLog(ticketId, `${piModelId} isn't available on this ChatGPT plan; building with ${fallback} instead.`, "command", ownerId);
+          piModelId = fallback;
+          triedModels.add(fallback);
+          await sleep(1500);
+          continue;
+        }
+
+        // OpenAI revoked the ChatGPT token before its stated expiry: refresh it and start once more.
+        if (useOpenAICodex && !tokenRefreshed && tokenRejected(`${reason}\n${piResult.tail.slice(-4000)}`)) {
+          await killPiInVm(workspaceId, pi.backgroundPid);
+          await addLog(ticketId, "OpenAI rejected the ChatGPT sign-in as expired; refreshing it and starting the build again.", "command", ownerId);
+          tokenRefreshed = true;
+          forceTokenRefresh = true;
+          await sleep(1500);
+          continue;
+        }
+        if (useOpenAICodex && tokenRejected(`${reason}\n${piResult.tail.slice(-4000)}`)) {
+          await addLog(ticketId, "OpenAI still rejects the ChatGPT sign-in after refreshing it. Reconnect ChatGPT in Settings → Integrations, then retry this ticket.", "cli_error", ownerId);
         }
 
         const finalReason = attempt > 0 ? `${reason} (still unfinished after ${attempt} auto-resume${attempt > 1 ? "s" : ""})` : reason;

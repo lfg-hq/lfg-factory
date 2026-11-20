@@ -18,5 +18,28 @@
       finally { input.disabled = !data.canChangeBuildStages; }
     });
     status.textContent = data.canChangeBuildStages ? 'Off by default for new projects.' : 'Only the project owner can change this setting.';
+    // Where builds and previews run, each on its own: a sandbox, each person's computer, or their own setting.
+    const runOnStatus = document.getElementById('cfg-run-on-status');
+    const where = v => v === 'cloud' ? 'in an LFG sandbox' : v === 'computer' ? 'on the computer of whoever starts them (LFG Desktop; a sandbox without it)' : 'where each person\u2019s "Use my computer for AI" setting says';
+    const describe = () => 'Builds run ' + where(document.getElementById('cfg-run-on').value) + '. Previews run ' + where(document.getElementById('cfg-preview-on').value) + '.';
+    const selects = ['cfg-run-on', 'cfg-preview-on'].map(id => document.getElementById(id)).filter(Boolean);
+    if (selects.length === 2 && runOnStatus) {
+      for (const select of selects) {
+        const field = select.dataset.field;
+        let saved = data[field] || '';
+        select.value = saved;
+        select.disabled = !data.canChangeBuildStages;
+        select.addEventListener('change', async () => {
+          const value = select.value; select.disabled = true;
+          try {
+            const response = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[field]:value})});
+            if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Could not save');
+            saved = value; runOnStatus.textContent = 'Saved. ' + describe();
+          } catch (error) { select.value = saved; runOnStatus.textContent = error.message; }
+          finally { select.disabled = false; }
+        });
+      }
+      runOnStatus.textContent = describe() + (data.canChangeBuildStages ? '' : ' Only the project owner can change this.');
+    }
   }).catch(error => { status.textContent = error.message; });
 })();

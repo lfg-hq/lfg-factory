@@ -1210,7 +1210,8 @@
   transition:background-color .12s ease,color .12s ease !important;
 }
 #sidebar .conversations-section .conversation-title {
-  min-width:0; width:auto; flex:0 1 auto !important; display:block !important;
+  /* Fills the row, so pin and delete always sit at the right edge, not after the text. */
+  min-width:0; width:auto; flex:1 1 auto !important; display:block !important;
   white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important;
   overflow-wrap:anywhere; font-size:12px !important; line-height:1.5 !important;
   font-weight:400 !important; color:inherit !important;
@@ -1303,3 +1304,209 @@
 
 /* The appearance control lives in the account menu; hide its legacy slot before JS moves it. */
 #sidebar .bottom-nav [data-theme-toggle] { display: none !important; }
+
+/* ── Compact open sidebar ─────────────────────────────────────────────────────
+   Rows were ~44px with big type; these bring them to ~32px, like a desktop app's
+   sidebar, so more of the chat list fits. The collapsed icon rail is unchanged. */
+.sidebar:not(.minimized) .sidebar-header { padding: 12px 10px 6px 16px !important; }
+.sidebar:not(.minimized) .logo-section { gap: 8px; }
+.sidebar:not(.minimized) .logo-icon,
+.sidebar:not(.minimized) .logo-text { font-size: 1.15rem; }
+.sidebar:not(.minimized) .project-selector-section { padding: 2px 8px 2px; }
+.sidebar:not(.minimized) .project-dropdown-trigger { padding: 6px 10px; font-size: 13px; }
+.sidebar:not(.minimized) .new-chat-section { padding: 2px 8px 2px !important; }
+.sidebar:not(.minimized) .new-chat-link { padding: 6px 10px !important; gap: 10px !important; font-size: 13.5px !important; border-radius: 7px; }
+.sidebar:not(.minimized) .new-chat-link i { font-size: 15px !important; width: 20px !important; height: 20px !important; }
+.sidebar:not(.minimized) .sidebar-nav { padding: 0 8px 6px !important; }
+.sidebar:not(.minimized) .nav-link { padding: 6px 10px !important; gap: 10px !important; font-size: 13.5px !important; margin-bottom: 1px !important; border-radius: 7px !important; }
+.sidebar:not(.minimized) .nav-link i { font-size: 15px !important; width: 20px !important; }
+#sidebar:not(.minimized) .conversations-section { padding: 6px 8px 6px !important; }
+#sidebar:not(.minimized) .conversations-section .conversation-item { min-height: 30px; padding: 5px 10px !important; }
+#sidebar:not(.minimized) .conversations-section .conversation-title { font-size: 13px !important; }
+
+/* ── Peek: hovering the collapsed rail opens the sidebar over the page ─────────
+   The page keeps its collapsed layout underneath (nothing shifts); leaving the
+   sidebar closes it again. The pin in its header keeps it open (sidebar.js). */
+.sidebar.peeking {
+    width: 260px !important;
+    box-shadow: 4px 0 24px rgba(15, 23, 42, 0.12) !important;
+}
+#minimize-btn .peek-pin { display: none; }
+.sidebar.peeking #minimize-btn .fa-chevron-left { display: none; }
+.sidebar.peeking #minimize-btn .peek-pin { display: inline-block; }
+/* "More" resets its font to inherit (button chrome), so size it like the other rows. */
+.sidebar:not(.minimized) .sidebar-nav button.nav-link.sidebar-more-toggle { font-size: 13.5px !important; line-height: 20px !important; }
+
+/* ── Calm sidebar (open state) ───────────────────────────────────────────────
+   Modelled on desktop-app sidebars: one flat background, every row in the same
+   text colour, quiet grey icons, and a soft grey highlight for the current page
+   and chat instead of purple. Section labels are plain small text, not caps.
+   The selectors carry #sidebar + html[data-theme] so they win over the older
+   light-mode.css and calm.css rules, which are !important throughout. */
+html[data-theme="light"] #sidebar {
+    --sb-bg: #f8f8f7;
+    --sb-text: #1f2328;
+    --sb-muted: #6b7280;
+    --sb-icon: #6b7280;
+    --sb-hover: rgba(15, 23, 42, 0.045);
+    --sb-active: rgba(15, 23, 42, 0.075);
+    --sb-border: #e7e7e4;
+}
+html[data-theme="dark"] #sidebar {
+    --sb-bg: #1b1b1b;
+    --sb-text: rgba(255, 255, 255, 0.88);
+    --sb-muted: rgba(255, 255, 255, 0.5);
+    --sb-icon: rgba(255, 255, 255, 0.55);
+    --sb-hover: rgba(255, 255, 255, 0.05);
+    --sb-active: rgba(255, 255, 255, 0.09);
+    --sb-border: rgba(255, 255, 255, 0.07);
+}
+html[data-theme] #sidebar {
+    background: var(--sb-bg) !important;
+    border-right: 1px solid var(--sb-border) !important;
+}
+html[data-theme] #sidebar .sidebar-header,
+html[data-theme] #sidebar .project-selector-section,
+html[data-theme] #sidebar .new-chat-section,
+html[data-theme] #sidebar .sidebar-nav,
+html[data-theme] #sidebar.sidebar .conversations-section,
+html[data-theme] #sidebar .sidebar-bottom-content {
+    background: transparent !important;
+    border-top: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
+}
+html[data-theme] #sidebar .logo-text { color: var(--sb-text) !important; }
+html[data-theme] #sidebar #minimize-btn { color: var(--sb-icon) !important; }
+html[data-theme] #sidebar #minimize-btn:hover { background: var(--sb-hover) !important; color: var(--sb-text) !important; }
+
+/* Every row: same text colour, normal weight, grey icon. */
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger,
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger .project-name-text,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link,
+html[data-theme] #sidebar:not(.minimized) .nav-link,
+html[data-theme] #sidebar:not(.minimized) .nav-link span.nav-text,
+html[data-theme] #sidebar:not(.minimized) .user-info-button,
+html[data-theme] #sidebar:not(.minimized) .username {
+    color: var(--sb-text) !important;
+    font-weight: 400 !important;
+    background: transparent !important;
+    opacity: 1 !important;
+}
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger i,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link i,
+html[data-theme] #sidebar:not(.minimized) .nav-link i,
+html[data-theme] #sidebar:not(.minimized) .nav-link:hover i,
+html[data-theme] #sidebar:not(.minimized) .nav-link.active i,
+html[data-theme] #sidebar:not(.minimized) #build-inbox-button i,
+html[data-theme] #sidebar:not(.minimized) .dropdown-icon {
+    color: var(--sb-icon) !important;
+    font-size: 14px !important;
+}
+html[data-theme] #sidebar:not(.minimized) .project-dropdown-trigger:hover,
+html[data-theme] #sidebar:not(.minimized) .new-chat-link:hover,
+html[data-theme] #sidebar:not(.minimized) .nav-link:hover,
+html[data-theme] #sidebar:not(.minimized) .sidebar-nav .nav-link:hover:not(.active),
+html[data-theme] #sidebar:not(.minimized) .user-info-button:hover,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item:hover {
+    background: var(--sb-hover) !important;
+    color: var(--sb-text) !important;
+}
+/* Where you are keeps the brand tint, in the open sidebar and the rail alike. */
+html[data-theme] #sidebar .nav-link.active,
+html[data-theme] #sidebar .sidebar-nav .nav-link.active,
+html[data-theme] #sidebar .project-dropdown-trigger.active,
+html[data-theme] #sidebar #build-inbox-button[aria-expanded="true"],
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active {
+    background: var(--tint-bg, rgba(124, 58, 237, 0.1)) !important;
+    color: var(--tint-text, #6d28d9) !important;
+    box-shadow: none !important;
+}
+html[data-theme] #sidebar .nav-link.active .nav-text,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item.active .conversation-title { color: var(--tint-text, #6d28d9) !important; font-weight: 500 !important; }
+html[data-theme] #sidebar .nav-link.active i,
+html[data-theme] #sidebar:not(.minimized) .nav-link.active i,
+html[data-theme] #sidebar #build-inbox-button[aria-expanded="true"] i { color: var(--primary-color, #7c3aed) !important; }
+
+/* Notification count: the small tinted pill, as in the rail. */
+html[data-theme] #sidebar:not(.minimized) #build-inbox-button .build-unread {
+    font-size: 11px !important;
+    font-weight: 500 !important;
+}
+
+/* Section labels and the chat list. */
+html[data-theme] #sidebar:not(.minimized) .sidebar-section-title,
+html[data-theme] #sidebar:not(.minimized) .conversation-group-label {
+    color: var(--sb-muted) !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    opacity: 1 !important;
+    padding: 14px 10px 4px !important;
+    margin: 0 !important;
+}
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item,
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-title {
+    color: var(--sb-text) !important;
+    font-weight: 400 !important;
+}
+html[data-theme] #sidebar.sidebar .conversations-section .conversation-item { border-radius: 7px !important; }
+html[data-theme] #sidebar .conversation-item .delete-conversation i,
+html[data-theme] #sidebar .conversation-item .conversation-pin i,
+html[data-theme] #sidebar .conversation-item .conversation-pin { color: var(--sb-icon) !important; }
+html[data-theme] #sidebar .conversation-item.is-pinned .conversation-pin,
+html[data-theme] #sidebar .conversation-item.is-pinned .conversation-pin i { color: var(--sb-muted) !important; }
+
+/* User row at the bottom: a small neutral avatar. */
+html[data-theme] #sidebar:not(.minimized) .user-avatar {
+    width: 26px !important;
+    height: 26px !important;
+    border-radius: 50% !important;
+    background: var(--sb-active) !important;
+}
+html[data-theme] #sidebar:not(.minimized) .avatar-text { color: var(--sb-text) !important; font-size: 12px !important; }
+html[data-theme] #sidebar:not(.minimized) .username { font-size: 13.5px !important; }
+
+/* ── Rail = open sidebar, minus the labels ────────────────────────────────────
+   Collapsing used to re-centre every icon in taller 40px rows at 18px, so the icons
+   jumped down and grew. The rail now keeps the open sidebar's padding, row height and
+   14px icons; only the labels go, so each icon stays exactly where it was. */
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-header {
+    justify-content: flex-start !important;
+    padding: 12px 10px 6px 16px !important;
+}
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .logo-section { width: auto !important; height: auto !important; justify-content: flex-start !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .logo-icon { font-size: 1.15rem !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .project-selector-section { padding: 2px 8px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .project-dropdown-trigger { padding: 6px 10px !important; justify-content: flex-start !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .new-chat-section { padding: 2px 8px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .new-chat-link { padding: 6px 10px !important; justify-content: flex-start !important; gap: 10px !important; border-radius: 7px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-nav:not(.bottom-nav) { padding: 0 8px 6px !important; }
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) .sidebar-nav:not(.bottom-nav) .nav-link {
+    padding: 6px 10px !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    margin-bottom: 1px !important;
+    border-radius: 7px !important;
+    font-size: 13.5px !important;
+    line-height: 20px !important;
+    min-height: 0 !important;
+}
+:is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) :is(.project-dropdown-trigger, .new-chat-link, .sidebar-nav .nav-link) > i:first-child {
+    font-size: 14px !important;
+    width: 20px !important;
+    height: 20px !important;
+    line-height: 20px !important;
+    margin: 0 !important;
+    text-align: center !important;
+}
+html[data-theme] :is(#sidebar.minimized, .sidebar-minimized-preload #sidebar) :is(.project-dropdown-trigger, .new-chat-link, .nav-link):not(.active) > i:first-child { color: var(--sb-icon) !important; }
+
+/* Pins are tilted, like a pushpin: the keep-open pin in the header and every chat pin. */
+#minimize-btn .peek-pin { transform: rotate(45deg); }
+#sidebar .conversation-item .conversation-pin i { transform: rotate(45deg) !important; display: inline-block; }
+#sidebar .conversation-item.is-pinned .conversation-pin { transform: none !important; }
+/* Same row height open and collapsed, so nothing below it shifts. */
+#sidebar .project-dropdown-trigger { height: 32px !important; box-sizing: border-box !important; }
+#sidebar .project-dropdown-trigger > i:first-child { width: 20px !important; text-align: center !important; font-size: 14px !important; margin: 0 !important; }

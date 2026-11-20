@@ -3,6 +3,14 @@ import { epics } from '../db/schema/epics.ts';
 import { eq, and, inArray } from 'drizzle-orm';
 import { linkDocsToEpic } from './epics.ts';
 
+/** A feature's own delivery docs. Only these follow the conversation's epic without being
+ * told to; a case study, overview or research note written in the same chat stays a
+ * project doc unless the agent links it on purpose. */
+const FEATURE_DOC_TYPES = new Set(['prd', 'tech_analysis', 'implementation', 'spec', 'design', 'design_language']);
+export function isFeatureDocType(fileType: unknown): boolean {
+  return typeof fileType === 'string' && FEATURE_DOC_TYPES.has(fileType.trim().toLowerCase());
+}
+
 /** Only infer a saved epic when the conversation has one unambiguous active feature. */
 export async function conversationEpic(projectId: string, conversationId: string): Promise<string | undefined> {
   const rows = await db.select({id:epics.id}).from(epics).where(and(

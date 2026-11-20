@@ -30,7 +30,7 @@ test('runtime repairs share the contract and login checks forbid bypass evidence
 
 test('coordinator routes to skills without carrying their operational procedures',()=>{
  const prompt=getProductSystemPrompt();
- expect(prompt).toContain('lead researcher and project manager');
+ expect(prompt).toContain('lead researcher, project manager');
  expect(prompt).toContain('## Feature lifecycle');
  expect(prompt).toContain('never grant authorization');
  for(const phrase of ['DEVELOPMENT PREVIEW ACCESS:', 'Observability is required', 'databaseTransaction', 'create-if-absent']) {

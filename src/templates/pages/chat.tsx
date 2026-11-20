@@ -40,17 +40,18 @@ export function ChatPage({
   <script src="/public/js/ticket-map.js?v=20261015-map-groups" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
+  <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261117-local-usage" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261118-composer-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
   <link rel="stylesheet" href="/public/css/polish.css" />
-  <link rel="stylesheet" href="/public/css/light/light-mode.css" />
+  <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <style>
     /* "Chat with ticket" log entries */
@@ -272,6 +273,7 @@ export function ChatPage({
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>
         <div id="ta-actionbar" style="display:flex;align-items:center;gap:8px;padding:8px 16px 10px;flex:none;border-bottom:0;background:var(--card-bg,#141414);">
           <button id="ta-build" title="Queue this ticket for the coding agent to build" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:#7c3aed;color:#fff;border:none;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-play" style="font-size:10px;"></i>Build</button>
+          <select id="ta-buildwith" aria-label="Build with" title="Where this ticket builds" style="height:32px;padding:0 8px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:none;max-width:210px;"></select>
           <button id="ta-stop" title="Stop the agent that is running right now" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid #5a2a30;font-size:12.5px;font-weight:600;display:none;align-items:center;gap:7px;"><i class="fas fa-stop" style="font-size:10px;"></i>Stop</button>
           <button id="ta-edit" title="Edit this ticket" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-pen" style="font-size:11px;"></i>Edit</button>
           <button id="ta-preview" title="Open this ticket's branch in the Preview panel (starts it if it isn't running)" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-desktop" style="font-size:11px;"></i>Preview</button>
@@ -579,28 +581,29 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
+  <script src="/public/js/markdown-config.js?v=20261118-retry2"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261118-docs-repaint"></script>
   <script src="/public/js/document-comments.js"></script>
-  <script src="/public/js/artifacts.js"></script>
+  <script src="/public/js/artifacts.js?v=20261118-panel-fit"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261101-no-run-local"></script>
+    <script src="/public/js/ticket-agent.js?v=20261118-build-with"></script>
+  <script src="/public/js/workspace-status.js?v=20261118"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/git-tab.js?v=20261118-describe"></script>
-  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="${fresh("/public/js/boards-tab.js")}"></script>
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261117-runner-status"></script>
+  <script src="/public/js/chat.js?v=20261118-open-url2"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

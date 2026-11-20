@@ -53,7 +53,12 @@ test("handshake and tool list: LFG's tools, without the fields the server fills 
 
   const list = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
   const names = list.result.tools.map((t: { name: string }) => t.name);
-  for (const n of ["createTickets", "streamDocumentContent", "getProjectDashboard", "askUser", "loadSkill"]) expect(names).toContain(n);
+  // Claude Code rejects the WHOLE list (every LFG tool vanishes) if any inputSchema isn't an object.
+  for (const t of list.result.tools) expect(t.inputSchema.type, t.name).toBe("object");
+  const hp = list.result.tools.find((t: { name: string }) => t.name === "handlePreview");
+  expect(hp.inputSchema.properties.action.enum).toEqual(expect.arrayContaining(["restart_app", "manage_data", "expose_port"]));
+  expect(hp.inputSchema.required).toEqual(["action"]);
+  for (const n of ["createTickets", "streamDocumentContent", "getProjectDashboard", "askUser", "loadSkill", "runInPreview", "handlePreview", "getPreviewDiagnostics"]) expect(names).toContain(n);
   const create = list.result.tools.find((t: { name: string }) => t.name === "createTickets");
   expect(Object.keys(create.inputSchema.properties)).not.toContain("projectId");
   expect(Object.keys(create.inputSchema.properties)).not.toContain("userId");
@@ -75,6 +80,9 @@ test("bad arguments and unknown tools come back as tool errors, not crashes", as
   expect(bad.result.isError).toBe(true);
   const unknown = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "rm_rf", arguments: {} } })).json();
   expect(unknown.result.isError).toBe(true);
+  // Strict tool schemas (the preview tools) must not get the server's fields pushed into them.
+  const preview = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "handlePreview", arguments: { action: "manage_data", instruction: "Reset the demo user's password" } } })).json();
+  expect(preview.result.content[0].text).not.toContain("Invalid arguments");
   const method = await (await rpc(turn.turnId, turn.token, { jsonrpc: "2.0", id: 6, method: "resources/list" })).json();
   expect(method.error.code).toBe(-32601);
 });

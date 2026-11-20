@@ -710,7 +710,7 @@ export const VsCodingAgentsPage = () => html`
           </form>
         </div>
         <p class="text-center text-sm text-slate-500 mt-6">
-          Prefer to read first? <a href="/agent/" class="font-semibold text-brand-600 hover:underline">How it works</a> &middot; <a href="/self-host/" class="font-semibold text-brand-600 hover:underline">Self-host</a> &middot; <a href="/case-studies/" class="font-semibold text-brand-600 hover:underline">Case studies</a>
+          Prefer to read first? <a href="/agent/" class="font-semibold text-brand-600 hover:underline">How it works</a> &middot; <a href="/self-host/" class="font-semibold text-brand-600 hover:underline">Self-host</a> &middot; <a href="/portfolio/" class="font-semibold text-brand-600 hover:underline">Portfolio</a>
         </p>
       </div>
     </section>

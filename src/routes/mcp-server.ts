@@ -28,18 +28,56 @@ const failure = (id: Rpc["id"], code: number, message: string) => ({ jsonrpc: "2
 
 /** The tool's JSON schema as the agent sees it: without the fields the server fills in. */
 async function publicSchema(tool: any): Promise<Record<string, unknown>> {
-  const schema = structuredClone(await asSchema(tool.inputSchema).jsonSchema) as Record<string, any>;
+  const raw = structuredClone(await asSchema(tool.inputSchema).jsonSchema) as Record<string, any>;
+  delete raw.$schema;
+  const schema = objectSchema(raw);
   if (schema.properties) for (const key of SERVER_OWNED) delete schema.properties[key];
   if (Array.isArray(schema.required)) schema.required = schema.required.filter((k: string) => !SERVER_OWNED.includes(k));
-  delete schema.$schema;
   return schema;
+}
+
+/** MCP clients require every tool's inputSchema to be `type: "object"`, and Claude Code drops
+ *  ALL of a server's tools when one isn't (handlePreview's action union is `anyOf`). Merge a
+ *  union of object branches into one object: every branch's properties, required only where
+ *  every branch requires it. The tool's own zod schema still validates each call exactly. */
+export function objectSchema(schema: Record<string, any>): Record<string, any> {
+  if (schema.type === "object") return schema;
+  const branches = (schema.anyOf ?? schema.oneOf ?? []) as Record<string, any>[];
+  if (!branches.length || !branches.every((b) => b?.type === "object")) return { type: "object", properties: {}, additionalProperties: true };
+  const properties: Record<string, any> = {};
+  for (const branch of branches) {
+    for (const [key, value] of Object.entries(branch.properties ?? {}) as [string, any][]) {
+      const prev = properties[key];
+      // The same key across branches (e.g. a discriminator): keep every allowed value.
+      if (prev && (prev.const !== undefined || prev.enum)) {
+        const values = new Set([...(prev.enum ?? [prev.const]), ...(value.enum ?? [value.const])]);
+        properties[key] = { type: prev.type ?? value.type, enum: [...values] };
+      } else if (!prev) properties[key] = value;
+    }
+  }
+  const required = branches.map((b) => new Set<string>(b.required ?? [])).reduce((a, b) => new Set([...a].filter((k) => b.has(k))));
+  const description = branches.map((b) => b.description).filter(Boolean).join(" ");
+  return { type: "object", properties, ...(required.size ? { required: [...required] } : {}), ...(description ? { description } : {}) };
+}
+
+/** Property names a JSON schema accepts, including in anyOf/oneOf/allOf branches. */
+function declaredKeys(schema: any, out = new Set<string>()): Set<string> {
+  if (!schema || typeof schema !== "object") return out;
+  for (const key of Object.keys(schema.properties ?? {})) out.add(key);
+  for (const branch of [...(schema.anyOf ?? []), ...(schema.oneOf ?? []), ...(schema.allOf ?? [])]) declaredKeys(branch, out);
+  return out;
 }
 
 async function callTool(tools: Record<string, any>, grant: TurnGrant, name: string, args: Record<string, unknown>, callId: string, signal: AbortSignal) {
   const tool = tools[name];
   if (!tool?.execute) return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
-  const input = { ...args, projectId: grant.projectId ?? undefined, userId: grant.userId, conversationId: grant.conversationId };
   const schema = asSchema(tool.inputSchema);
+  // Fill in the server-owned fields only where the tool declares them: strict schemas
+  // (the preview tools) reject unknown keys, which failed every preview call.
+  const declared = declaredKeys(await schema.jsonSchema);
+  const owned: Record<string, unknown> = { projectId: grant.projectId ?? undefined, userId: grant.userId, conversationId: grant.conversationId };
+  const input = { ...args };
+  for (const key of SERVER_OWNED) { if (declared.has(key)) input[key] = owned[key]; else delete input[key]; }
   const checked = schema.validate ? await schema.validate(input) : { success: true as const, value: input };
   if (!checked.success) return { content: [{ type: "text", text: `Invalid arguments for ${name}: ${String((checked as { error?: unknown }).error ?? "")}`.slice(0, 2000) }], isError: true };
   try {

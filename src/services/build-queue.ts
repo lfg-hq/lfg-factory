@@ -136,7 +136,9 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
   // A retry may come from a different chat or the ticket view. Subsequent chain
   // responses follow that latest request instead of reviving the old destination.
   const origin = await getBuildOrigin(ticketId);
-  await db.update(agentRuns).set({ conversationId: origin.conversationId || "",
+  // A retry with no chat of its own (ticket view, the computer) keeps the run's chat:
+  // blanking it silenced "resuming" and "all built", leaving the chat stuck on "paused".
+  await db.update(agentRuns).set({ ...(origin.conversationId ? { conversationId: origin.conversationId } : {}),
     ...(origin.userId ? {userId: origin.userId} : {}), updatedAt: new Date(),
   }).where(eq(agentRuns.id, item.agentRunId));
 
@@ -217,7 +219,7 @@ async function dispatchNext(runId: string): Promise<string | null> {
     await logRunEvent(runId, item.id, "ticket_queued", { ticketId: item.ticketId });
     await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId, true);
     await reportBuildStatus(item.ticketId, "queued", "Build queued.");
-    emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId });
+    emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId, ...(run.userId ? { actorId: run.userId } : {}) });
     return item.ticketId;
   }
   return null; // everything left is blocked behind a failure
@@ -258,12 +260,16 @@ async function finishRun(runId: string): Promise<void> {
   previewBranch = branch;
 
   try {
-    const { restartPreview } = await import("./dev-preview.ts");
-    const res = await restartPreview(run.projectId, {
-      userId: run.userId,
-      branch,
-      conversationId: run.conversationId || null,
-    });
+    // "Use my computer for AI" on: the preview runs on the person's computer, not a cloud sandbox.
+    const local = await import("./runner/preview-job.ts");
+    const res = (await local.resolvePreviewWhere(run.userId, { projectId: run.projectId })).where === "computer"
+      ? await local.startLocalPreview({ projectId: run.projectId, userId: run.userId, refresh: true, ...(await local.resolvePreviewBranch(run.projectId, { branch })) })
+          .then(job => local.waitForLocalPreview(job.id, 15 * 60_000))
+      : await (await import("./dev-preview.ts")).restartPreview(run.projectId, {
+          userId: run.userId,
+          branch,
+          conversationId: run.conversationId || null,
+        });
     if ("error" in res) {
       await logRunEvent(runId, null, "preview_failed", { branch, error: res.error }, true);
       await announce(runId, `⚠️ The build finished, but the preview didn't start: ${res.error}\n\nYou can retry it from the **Preview** tab.`);

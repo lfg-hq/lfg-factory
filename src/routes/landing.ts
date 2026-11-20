@@ -4,8 +4,8 @@ import { HowItWorksPage } from "../templates/pages/how-it-works.tsx";
 import { SoftwareServicesPage } from "../templates/pages/software-services.tsx";
 import { StartupsPage } from "../templates/pages/startups.tsx";
 import { DevelopmentServicesPage } from "../templates/pages/development-services.tsx";
-import { CaseStudiesIndexPage, CaseStudyPage } from "../templates/pages/case-studies-pages.tsx";
-import { getCaseStudy } from "../data/case-studies.ts";
+import { PortfolioIndexPage, PortfolioProjectPage } from "../templates/pages/portfolio-pages.tsx";
+import { getPortfolioProject } from "../data/portfolio.ts";
 import { AgentPage } from "../templates/pages/agent.tsx";
 import { SelfHostPage } from "../templates/pages/self-host.tsx";
 import { WhiteLabelPage } from "../templates/pages/white-label.tsx";
@@ -128,17 +128,15 @@ landing.get("/self-host/", (c) => c.html(SelfHostPage()));
 landing.get("/services", (c) => c.redirect("/services/"));
 landing.get("/services/", (c) => c.html(DevelopmentServicesPage()));
 
-landing.get("/case-studies", (c) => c.redirect("/case-studies/"));
-landing.get("/case-studies/", (c) => c.html(CaseStudiesIndexPage()));
-landing.get("/case-studies/:slug", (c) => c.redirect(`/case-studies/${c.req.param("slug")}/`));
-landing.get("/case-studies/:slug/", (c) => {
-  const study = getCaseStudy(c.req.param("slug"));
-  if (!study) return c.notFound();
-  return c.html(CaseStudyPage({ study }));
+// Case studies became the portfolio; old links (and the earlier /proof) land there.
+landing.get("/case-studies", (c) => c.redirect("/portfolio/", 301));
+landing.get("/case-studies/", (c) => c.redirect("/portfolio/", 301));
+landing.get("/case-studies/:slug{.+}", (c) => {
+  const slug = c.req.param("slug").replace(/\/$/, "");
+  return c.redirect(getPortfolioProject(slug) ? `/portfolio/${slug}/` : "/portfolio/", 301);
 });
-// Earlier names for the same page.
-landing.get("/proof", (c) => c.redirect("/case-studies/", 301));
-landing.get("/proof/", (c) => c.redirect("/case-studies/", 301));
+landing.get("/proof", (c) => c.redirect("/portfolio/", 301));
+landing.get("/proof/", (c) => c.redirect("/portfolio/", 301));
 
 landing.get("/white-label", (c) => c.redirect("/white-label/"));
 landing.get("/white-label/", (c) => c.html(WhiteLabelPage()));
@@ -149,11 +147,26 @@ landing.get("/vs-coding-agents/", (c) => c.html(VsCodingAgentsPage()));
 landing.get("/why-lfg", (c) => c.redirect("/vs-coding-agents/", 301));
 landing.get("/why-lfg/", (c) => c.redirect("/vs-coding-agents/", 301));
 
-// The factory pitch is now the homepage; /portfolio became /case-studies.
+// The factory pitch is now the homepage.
 landing.get("/factory", (c) => c.redirect("/", 301));
 landing.get("/factory/", (c) => c.redirect("/", 301));
-landing.get("/portfolio", (c) => c.redirect("/case-studies/", 301));
-landing.get("/portfolio/", (c) => c.redirect("/case-studies/", 301));
+
+// Consulting portfolio: client and product work, one full case study each.
+landing.get("/portfolio", (c) => c.redirect("/portfolio/"));
+// Mags was split into two case studies; keep the old URL working.
+landing.get("/portfolio/mags", (c) => c.redirect("/portfolio/mags-sandboxes/", 301));
+landing.get("/portfolio/mags/", (c) => c.redirect("/portfolio/mags-sandboxes/", 301));
+landing.get("/portfolio/", (c) => c.html(PortfolioIndexPage()));
+// Unknown slugs 404 here: redirecting them would bounce against the global
+// trailing-slash strip that runs on not-found responses.
+landing.get("/portfolio/:slug", (c) => getPortfolioProject(c.req.param("slug"))
+  ? c.redirect(`/portfolio/${c.req.param("slug")}/`)
+  : c.notFound());
+landing.get("/portfolio/:slug/", (c) => {
+  const project = getPortfolioProject(c.req.param("slug"));
+  if (!project) return c.notFound();
+  return c.html(PortfolioProjectPage({ project }));
+});
 
 landing.post("/api/portfolio/connect", async (c) => {
   try {

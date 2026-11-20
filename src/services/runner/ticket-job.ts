@@ -16,7 +16,7 @@ import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { addLog } from "../ticket-logs.ts";
 import { enqueueJob, userHasConnectedRunner } from "./hub.ts";
 import { localAiSettings } from "./opt-in.ts";
-import { RUNNER_PROTOCOL_VERSION, type ClaudeTaskPayload } from "./protocol.ts";
+import { RUNNER_PROTOCOL_VERSION, type AgentKind, type ClaudeTaskPayload } from "./protocol.ts";
 
 export class RunnerJobError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 409 = 400) { super(message); }
@@ -66,6 +66,8 @@ export async function startTicketOnRunner(input: {
   followUp?: string;
   /** Called from the build queue, where the ticket is already marked "queued". */
   fromQueue?: boolean;
+  /** The ticket's own agent choice; otherwise the person's chosen agent. */
+  agent?: AgentKind;
 }) {
   const [ticket] = await db.select().from(projectTickets)
     .where(and(eq(projectTickets.id, input.ticketId), eq(projectTickets.projectId, input.projectId))).limit(1);
@@ -76,7 +78,11 @@ export async function startTicketOnRunner(input: {
   if (!project) throw new RunnerJobError("Project not found", 404);
   if (!project.repoUrl) throw new RunnerJobError("Connect a Git repository to this project before running it on your computer.");
 
-  const { agent, model, effort } = await localAiSettings(input.actorId);
+  const settings = await localAiSettings(input.actorId);
+  const agent = input.agent ?? settings.agent;
+  // The person's model/effort belong to their chosen agent; another agent uses its own default.
+  const model = agent === settings.agent ? settings.model : null;
+  const effort = agent === settings.agent ? settings.effort : null;
   // A follow-up continues the same agent's latest session on this ticket, if there is one.
   const [previous] = input.followUp
     ? await db.select({ session: runnerJobs.agentSession }).from(runnerJobs)
@@ -92,6 +98,8 @@ export async function startTicketOnRunner(input: {
     ticketTitle: ticket.name,
     repoUrl: project.repoUrl,
     branch,
+    // Like a cloud build, the ticket lands on its epic branch so the next ticket builds on it.
+    ...(anchor.anchorBranch && anchor.anchorBranch !== branch ? { mergeInto: anchor.anchorBranch } : {}),
     startFrom: [...new Set([anchor.anchorBranch, anchor.baseBranch, "main", "master"])],
     prompt: input.followUp ? buildFollowUpPrompt(ticket, input.followUp) : buildRunnerPrompt(ticket, input.notes),
     commitMessage: `${ticket.ticketKey ? `${ticket.ticketKey}: ` : ""}${ticket.name}`.slice(0, 200),
@@ -101,6 +109,7 @@ export async function startTicketOnRunner(input: {
     ...(previous?.session ? { sessionId: previous.session } : {}),
     allowedTools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
     maxTurns: 80,
+    ...(input.followUp ? {} : { build: true }),
   };
 
   // "executing" from the start: "queued" would let the cloud worker pick it up after a restart.

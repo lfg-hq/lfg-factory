@@ -1,0 +1,48 @@
+/* Chat header: Docs / Tickets / Preview at a glance (public/js/workspace-status.js). */
+.ws-chips{display:flex;align-items:center;gap:6px}
+.ws-chip{position:relative;height:36px;min-width:36px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border:1px solid var(--border-color,#dce2ed);border-radius:8px;background:transparent;color:var(--text-secondary,#64748b);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap}
+.ws-chip:hover{background:rgba(139,92,246,.08);color:var(--text-color,#0f172a)}
+.ws-chip:focus-visible{outline:2px solid #8b5cf6;outline-offset:2px}
+.ws-chip i{font-size:14px}
+.ws-chip-text:empty{display:none}
+.ws-chip-dot{display:none;width:7px;height:7px;border-radius:50%}
+.ws-chip[data-state="building"]{color:#6d28d9;border-color:rgba(124,58,237,.45);background:rgba(124,58,237,.06)}
+.ws-chip[data-state="building"] .ws-chip-dot{display:inline-block;background:#7c3aed;animation:ws-pulse 1.4s ease-in-out infinite}
+#ws-preview .ws-chip-dot{position:absolute;top:6px;right:6px;width:7px;height:7px}
+#ws-preview[data-state="running"] .ws-chip-dot{display:block;background:#16a34a}
+#ws-preview[data-state="starting"] .ws-chip-dot{display:block;background:#f59e0b;animation:ws-pulse 1.4s ease-in-out infinite}
+#ws-preview[data-state="error"] .ws-chip-dot{display:block;background:#dc2626}
+@keyframes ws-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.75)}}
+/* Narrow chat column: icons only. */
+@container (max-width: 560px){.ws-chip-text{display:none}}
+@media (max-width: 720px){.ws-chip-text{display:none}}
+
+/* Build bar pinned above the message box. */
+.ws-buildbar{display:flex;align-items:stretch;gap:6px;margin:0 0 8px;padding:0;border:1px solid rgba(124,58,237,.3);border-radius:12px;background:var(--card-bg,#fff);
+  box-shadow:0 1px 2px rgba(15,23,42,.05);overflow:hidden}
+.ws-buildbar[hidden]{display:none}
+.ws-buildbar[data-state="done"]{border-color:rgba(22,163,74,.35)}
+.ws-buildbar[data-state="failed"]{border-color:rgba(220,38,38,.35)}
+.ws-bar-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px 12px;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--text-color,#0f172a);font:inherit}
+.ws-bar-main:hover{background:rgba(139,92,246,.05)}
+.ws-bar-main:focus-visible{outline:2px solid #8b5cf6;outline-offset:-2px}
+.ws-bar-line{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px}
+.ws-bar-line strong{font-weight:600;white-space:nowrap}
+.ws-bar-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-color,#0f172a)}
+.ws-bar-stage{flex:none;padding:1px 8px;border-radius:999px;background:rgba(124,58,237,.1);color:#6d28d9;font-size:11.5px;font-weight:600;white-space:nowrap}
+.ws-bar-meta{flex:none;margin-left:auto;color:var(--text-secondary,#64748b);font-size:12px;white-space:nowrap}
+.ws-bar-note{display:block;padding-left:15px;color:var(--text-secondary,#64748b);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-bar-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#7c3aed;animation:ws-pulse 1.4s ease-in-out infinite}
+.ws-bar-icon{flex:none;font-size:13px}
+.ws-good{color:#16a34a}.ws-bad{color:#dc2626}
+.ws-bar-more,.ws-bar-close{flex:none;border:0;border-left:1px solid var(--border-color,#e2e8f0);background:transparent;color:var(--text-secondary,#64748b);font:inherit;font-size:12px;padding:0 12px;cursor:pointer}
+.ws-bar-close{font-size:18px;line-height:1}
+.ws-bar-more:hover,.ws-bar-close:hover{background:rgba(139,92,246,.06);color:var(--text-color,#0f172a)}
+@media (max-width: 640px){.ws-bar-name,.ws-bar-meta{display:none}}
+@media (prefers-reduced-motion: reduce){.ws-chip-dot,.ws-bar-dot{animation:none!important}}
+
+/* Chat build card: the latest agent note stays one quiet line. */
+.ca-build-update{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+#chat-form:has(> .ws-buildbar:not([hidden])){flex-direction:column;align-items:stretch}
+#chat-form > .ws-buildbar{width:100%;box-sizing:border-box}
