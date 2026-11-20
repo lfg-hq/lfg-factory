@@ -57,6 +57,7 @@ export function previewSituationText(s: PreviewSituation): string {
       : "This project previews ON THE USER'S COMPUTER, and it is NOT running right now. Start it with handlePreview restart_app (it starts it on their computer); don't describe the cloud preview as theirs.");
     if (s.otherCopy) lines.push(`A separate cloud copy is also up at ${s.otherCopy.url}. It has its OWN database and keys: logins, data or restarts there do not change what the user sees. Don't test or fix it unless they ask for the cloud preview.`);
     lines.push("handlePreview (restart_app, manage_data) and getPreviewDiagnostics act on the copy on their computer. inspectPreview and runInPreview reach only the cloud sandbox and refuse here.");
+    lines.push("You cannot run shell commands on their computer, and there is no approval prompt that would let you: never ask the user to approve one or to run a command themselves. A missing table or column there (a REQUEST_FAILED or 'relation does not exist' in the app's log) means its database update hasn't run: handlePreview restart_app runs the app's own database update (its migrate script) before starting it, then check again.");
     if (s.keysNotLoaded.length) lines.push(`Environment keys saved since it started, which it has NOT loaded yet: ${s.keysNotLoaded.join(", ")}. After saving keys, restart it with handlePreview restart_app so the app sees them.`);
     else lines.push("After saving environment keys with setEnvVar, restart it with handlePreview restart_app: a running app only reads keys when it starts.");
   } else {

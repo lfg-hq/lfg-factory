@@ -139,6 +139,26 @@ export function detectPlan(dir: string): PreviewPlan | null {
   return null;
 }
 
+/** Scripts an app ships to bring its database schema up to date, in the order LFG prefers them. */
+const MIGRATE_SCRIPTS = ["db:migrate", "migrate", "migrate:deploy", "db:migrate:deploy"];
+
+/**
+ * The app's own schema-update command, when the plan lists none. A saved plan can miss it
+ * (the cloud copy got its tables by hand), and then this computer's database never gets new
+ * tables: the app starts, and the feature that needs them fails. These scripts are the app's
+ * own and are meant to run on every deploy, so running them on each start is safe.
+ */
+export function withRepoMigrations(plan: PreviewPlan, dir: string): PreviewPlan {
+  if (plan.migrations?.length || !existsSync(join(dir, "package.json"))) return plan;
+  let scripts: Record<string, string> = {};
+  try { scripts = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).scripts ?? {}; } catch { return plan; }
+  const script = MIGRATE_SCRIPTS.find(s => typeof scripts[s] === "string" && scripts[s].trim());
+  if (!script) return plan;
+  const has = (f: string) => existsSync(join(dir, f));
+  const pm = has("bun.lock") || has("bun.lockb") ? "bun" : has("pnpm-lock.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : "npm";
+  return { ...plan, migrations: [`${pm} run ${script}`] };
+}
+
 /** Point commands written for the cloud sandbox at this computer: its folder, and 127.0.0.1 only. */
 export function localizeCommand(cmd: string, dir: string): string {
   return cmd.replace(/\/data\/project\b/g, dir).replace(/\b0\.0\.0\.0\b/g, "127.0.0.1");
@@ -312,9 +332,11 @@ export class LocalPreview {
     }
     this.writeMeta({ ...(meta ?? {}), branch: p.branch, ...(refresh ? { installedCommit: undefined } : {}) });
 
-    const plan = p.plan ?? detectPlan(this.dir);
+    const found = p.plan ?? detectPlan(this.dir);
+    const plan = found ? withRepoMigrations(found, this.dir) : null;
     if (!plan) throw new Error("LFG has no saved way to run this app yet, and couldn't work one out on this computer. Run the preview once in the cloud so LFG can work out the setup, then switch back to your computer.");
     if (!p.plan) this.log(`No saved plan; running it as a ${plan.stack ?? "detected"} app: ${plan.runCmd}`);
+    if (!found!.migrations?.length && plan.migrations?.length) this.log(`The plan lists no database update; running the app's own: ${plan.migrations.join(" && ")}.`);
 
     // 2. Databases.
     const appEnv: NodeJS.ProcessEnv = { ...env, ...p.env, HOST: "127.0.0.1" };
