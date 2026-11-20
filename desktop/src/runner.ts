@@ -60,7 +60,7 @@ export interface RunnerOptions {
   approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Ask the person whether to run this app's commands for a preview. Absent: previews are declined. */
   approvePreview?(job: PreviewJobOffer, commands: string[]): Promise<ApprovalResult>;
-  /** A chat wants to change data (accounts, test data) in a preview running here. */
+  /** Optional extra check before a data operation on a preview running here (none by default). */
   approvePreviewData?(job: PreviewDataJobOffer): Promise<ApprovalResult>;
   /** Docker Desktop is installed but stopped and a preview needs a database: ask to start it. */
   askStartDocker?(info: { projectName: string; engine: string }): Promise<boolean>;
@@ -366,9 +366,12 @@ export class Runner {
     if (!p || typeof p.projectId !== "string" || !p.input || typeof p.input !== "object" || Array.isArray(p.input)) return reject("The data request is malformed.");
     const target = this.previews.get(previewFolderName(p.projectId))?.preview.dataTarget();
     if (!target) return reject("That preview isn't running on this computer.");
-    if (!this.opts.approvePreviewData) return reject("This computer doesn't change preview data.");
-    const decision = await this.opts.approvePreviewData(job).catch(() => ({ approved: false as const, reason: "Approval failed" }));
-    if (!decision.approved) return reject(decision.reason ?? "Declined on this computer");
+    // No separate prompt: the person approved running this preview here, and this only runs
+    // LFG's own fixed data program against that preview's own local database.
+    if (this.opts.approvePreviewData) {
+      const decision = await this.opts.approvePreviewData(job).catch(() => ({ approved: false as const, reason: "Approval failed" }));
+      if (!decision.approved) return reject(decision.reason ?? "Declined on this computer");
+    }
     this.send({ type: "job.accepted", jobId: job.id });
     try {
       const data = Buffer.from(JSON.stringify(p.input)).toString("base64");

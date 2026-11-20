@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { Runner, defaultWorkRoot, type RunnerState } from "./runner.ts";
 import { nodeSocketFactory } from "./socket.ts";
 import { signInWithBrowser, SignInCancelled } from "./browser-signin.ts";
-import type { BuildJobOffer, PreviewDataJobOffer, PreviewJobOffer } from "./runner.ts";
+import type { BuildJobOffer, PreviewJobOffer } from "./runner.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -34,8 +34,6 @@ interface Config {
   trustedProjects?: string[];
   /** Previews that run without asking: project + a hash of the exact commands approved. */
   trustedPreviews?: string[];
-  /** Projects whose previews here LFG chats may change data in without asking. */
-  trustedPreviewData?: string[];
   workRoot?: string;
 }
 
@@ -281,35 +279,6 @@ async function approvePreview(job: PreviewJobOffer, commands: string[]) {
   return { approved: true as const };
 }
 
-/**
- * A chat asks to change data (a test login, test records) in a preview running here. Ask once
- * per project per session, or never again if the person says so. Only LFG's own fixed data
- * program runs, in the preview's folder against the preview's own database.
- */
-const dataAllowedThisSession = new Set<string>();
-async function approvePreviewData(job: PreviewDataJobOffer) {
-  const p = job.payload;
-  if (dataAllowedThisSession.has(p.projectId) || config.trustedPreviewData?.includes(p.projectId)) return { approved: true as const };
-  const { response, checkboxChecked } = await dialog.showMessageBox({
-    type: "question",
-    buttons: ["Allow", "Decline"],
-    defaultId: 0,
-    cancelId: 1,
-    message: `Let LFG change data in the ${p.projectName} preview?`,
-    detail: `LFG wants to: ${p.activity}.\n\nLFG's data tool reads the app's code and works on the preview's own database on this computer (test logins and test data). ` +
-      "It can't edit files, install anything or reach your other databases.",
-    checkboxLabel: "Don't ask again for this project",
-    checkboxChecked: true,
-  });
-  if (response !== 0) return { approved: false as const, reason: "Declined on this computer" };
-  dataAllowedThisSession.add(p.projectId);
-  if (checkboxChecked) {
-    config.trustedPreviewData = [...new Set([...(config.trustedPreviewData ?? []), p.projectId])].slice(-200);
-    saveConfig();
-  }
-  return { approved: true as const };
-}
-
 /** A preview needs a database and Docker Desktop is installed but not running: ask to start it. */
 async function askStartDocker(info: { projectName: string; engine: string }) {
   const { response } = await dialog.showMessageBox({
@@ -354,7 +323,6 @@ function startRunner() {
     appVersion: app.getVersion(),
     approve,
     approvePreview,
-    approvePreviewData,
     approveNodeDownload,
     askStartDocker,
     onState: (state, detail) => {
