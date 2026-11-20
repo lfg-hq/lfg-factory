@@ -586,7 +586,7 @@ export function ChatPage({
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261121-panel-lists"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261121-ticket-scroll"></script>
   <script src="/public/js/document-comments.js?v=20261121-diagrams"></script>
   <script src="/public/js/artifacts.js?v=20261120-docedit"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />

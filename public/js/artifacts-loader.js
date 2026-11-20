@@ -2208,7 +2208,7 @@ document.addEventListener('DOMContentLoaded', function() {
             ticketsTab.innerHTML = '<div class="loading-state"><div class="spinner"></div><div>Loading tickets...</div></div>';
 
             const previous = append && this._ticketPage?.projectId === projectId ? this._ticketPage : null;
-            const url = `/projects/${projectId}/api/checklist/?limit=200&offset=${previous?.nextOffset || 0}`;
+            const url = `/projects/${projectId}/api/checklist/?limit=20&offset=${previous?.nextOffset || 0}`;
 
             fetch(url)
                 .then(response => {
@@ -2449,12 +2449,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     renderTickets();
-                    if (data.hasMore) {
-                        const more = document.createElement('button'); more.type = 'button'; more.className = 'btn btn-secondary';
-                        more.textContent = 'Show older tickets';
-                        more.style.margin = '12px auto 20px'; more.style.display = 'block';
-                        more.onclick = () => { more.disabled = true; this.loadTickets(projectId, true); };
-                        ticketsTab.append(more);
+                    if (data.hasMore && 'IntersectionObserver' in window) {
+                        const sentinel = document.createElement('div');
+                        sentinel.style.height = '40px';
+                        ticketsTab.append(sentinel);
+                        const obs = new IntersectionObserver((entries) => {
+                            if (!entries.some(e => e.isIntersecting)) return;
+                            obs.disconnect();
+                            this.loadTickets(projectId, true);
+                        }, { rootMargin: '200px' });
+                        obs.observe(sentinel);
                     }
                 })
                 .catch(error => {
@@ -2714,7 +2718,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const previous = append && this._checklistPage?.projectId === projectId ? this._checklistPage : null;
             const offset = previous?.nextOffset || 0;
             const requestId = this._checklistRequestId = (this._checklistRequestId || 0) + 1;
-            const checklistUrl = `/projects/${projectId}/api/checklist/?limit=200&offset=${offset}`;
+            const checklistUrl = `/projects/${projectId}/api/checklist/?limit=20&offset=${offset}`;
             
             fetch(checklistUrl)
                 .then(response => {
@@ -3078,19 +3082,30 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                     `;
 
+                    // An append re-renders the whole list; keep the reader where they were.
+                    const scroller = append ? (() => { for (let n = checklistTab; n; n = n.parentElement) { if (n.scrollHeight > n.clientHeight && /(auto|scroll)/.test(getComputedStyle(n).overflowY)) return n; } return null; })() : null;
+                    const keepTop = scroller ? scroller.scrollTop : 0;
                     checklistTab.innerHTML = checklistHTML;
+                    if (scroller) requestAnimationFrame(() => { scroller.scrollTop = keepTop; });
                     window.TicketMap?.mount(projectId, checklistTab);
+                    // Older tickets load on their own when you scroll to the end of the
+                    // list, 20 at a time. No banner, no button.
+                    if (this._checklistMoreObs) { this._checklistMoreObs.disconnect(); this._checklistMoreObs = null; }
                     if (data.hasMore) {
-                        // Paging lives at the END of the list, where you run out of
-                        // tickets — not as a banner over the filters.
-                        const paging = document.createElement('div');
-                        paging.className = 'checklist-more';
-                        paging.style.cssText = 'padding:12px 16px 20px;display:flex;justify-content:center';
-                        const more = document.createElement('button');
-                        more.type = 'button'; more.className = 'btn btn-secondary'; more.textContent = 'Show older tickets';
-                        more.onclick = () => { more.disabled = true; more.textContent = 'Loading…'; this.loadChecklist(projectId, true); };
-                        paging.append(more);
-                        (checklistTab.querySelector('.checklist-wrapper') || checklistTab).append(paging);
+                        const sentinel = document.createElement('div');
+                        sentinel.className = 'checklist-more';
+                        sentinel.setAttribute('aria-hidden', 'true');
+                        sentinel.style.cssText = 'height:40px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px';
+                        (checklistTab.querySelector('.checklist-wrapper') || checklistTab).append(sentinel);
+                        if ('IntersectionObserver' in window) {
+                            const obs = this._checklistMoreObs = new IntersectionObserver((entries) => {
+                                if (!entries.some(e => e.isIntersecting)) return;
+                                obs.disconnect(); this._checklistMoreObs = null;
+                                sentinel.textContent = 'Loading…';
+                                this.loadChecklist(projectId, true);
+                            }, { rootMargin: '200px' });
+                            obs.observe(sentinel);
+                        }
                     }
 
                     // Get filter elements and content container

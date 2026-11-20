@@ -938,7 +938,7 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
   const project = access.project;
 
   const paged = c.req.query("limit") !== undefined;
-  const limit = Math.min(500, Math.max(1, Number(c.req.query("limit")) || 20));
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit")) || 20));
   const rawOffset = Number(c.req.query("offset"));
   const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
   const [stageRows, fetchedTickets, epicRows] = await Promise.all([
