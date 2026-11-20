@@ -495,8 +495,7 @@
           <i class="fas fa-laptop" style="color:#7c3aed;"></i>
           <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${isDesktopApp
             ? "Running on your computer at " + esc(previewUrl)
-            : "Running on your computer at " + esc(previewUrl) + ". Only that computer can open it; if it stays blank here, open it in a new tab."}</span>
-          <button data-bx="external" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12px;flex:none;">Open in new tab</button>
+            : "Running on your computer at " + esc(previewUrl) + ". Only that computer can open it."}</span>
           <button data-action="usecloud" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;font-size:12px;flex:none;">Run in the cloud instead</button>
         </div>` : ""}
         <div id="pv-frames" style="flex:1;position:relative;background:#fff;"></div>

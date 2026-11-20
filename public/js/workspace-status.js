@@ -1,6 +1,7 @@
 // At-a-glance workspace status for the chat page:
-// - counts on the side panel's Docs / Tickets / Preview tabs, and, while the panel is
-//   closed, one pill in the chat header with the same status that opens the panel;
+// - icons in the chat header for Docs, Tickets and Preview (the Tickets icon pulses while
+//   something builds), each opening the side panel straight on its tab, plus a ⋯ menu for
+//   the panel's other tabs;
 // - a build bar pinned above the message box while tickets build, so progress stays in
 //   view however far the conversation scrolls.
 (function () {
@@ -20,8 +21,8 @@
     return n;
   }
   function openTab(tab) {
-    if (window.ArtifactsPanel && window.ArtifactsPanel.open) window.ArtifactsPanel.open();
     if (typeof window.switchTab === 'function') window.switchTab(tab);
+    if (window.ArtifactsPanel && window.ArtifactsPanel.open) window.ArtifactsPanel.open();
   }
   function elapsed(iso) {
     if (!iso) return '';
@@ -34,65 +35,102 @@
     return t.where === 'computer' ? 'on your computer' + (t.agent && AGENTS[t.agent] ? ' · ' + AGENTS[t.agent] : '') : 'in the cloud';
   }
 
-  // ── Counts live on the panel's own tabs ──────────────────────────────
-  // While the panel is open, its Docs / Tickets / Preview tabs carry the counts and the
-  // preview dot, so the header needs no buttons of its own. While it is closed, one quiet
-  // pill in the header ("Docs 14 · Tickets 22 · Preview ●") keeps the status in view.
-  function previewKind() {
-    const p = String((state && state.preview) || 'idle');
-    return p === 'running' ? 'running' : p === 'error' ? 'error' : /^(detecting|provisioning|installing|seeding|starting)$/.test(p) ? 'starting' : 'idle';
+  // ── Header icons ─────────────────────────────────────────────────────
+  // Docs, Tickets and Preview as icons with counts, then a ⋯ for the panel's other tabs.
+  // Each icon opens the panel straight on its tab; clicking the tab you're already on
+  // closes the panel. Hover shows what each one is.
+  const OTHER_TABS = [['boards', 'Boards', 'fa-chalkboard'], ['evals', 'Evals', 'fa-vial'], ['git', 'Git', 'fa-code-branch'], ['env', 'Env', 'fa-key'], ['notes', 'Notes', 'fa-note-sticky']];
+  function panelOpen() { return !!document.querySelector('#artifacts-panel.expanded'); }
+  function activeTab() { return document.querySelector('.tab-button.active')?.getAttribute('data-tab') || null; }
+  function goTo(tab) {
+    if (panelOpen() && activeTab() === tab) { window.ArtifactsPanel?.close?.(); paintActive(); return; }
+    // Switch first, then open: the panel appears already on the right tab, with no
+    // flash of whatever tab it showed last.
+    try { if (typeof window.switchTab === 'function') window.switchTab(tab); } catch (e) { console.warn('switching tab failed:', e); }
+    if (!panelOpen()) window.ArtifactsPanel?.open?.();
+    paintActive();
   }
-  const PREVIEW_WORDS = { running: 'running', error: 'failed', starting: 'starting', idle: 'not running' };
-  function tabBadge(tab) {
-    const btn = document.querySelector('.tab-button[data-tab="' + tab + '"]');
-    if (!btn) return null;
-    let badge = btn.querySelector('.ws-tab-badge');
-    if (!badge) { badge = el('span', 'ws-tab-badge'); badge.setAttribute('aria-hidden', 'true'); btn.append(badge); }
-    return badge;
-  }
-  function paintTabs() {
-    const docs = tabBadge('filebrowser');
-    if (docs) { docs.textContent = state.docs ? String(state.docs) : ''; docs.dataset.state = 'idle'; }
-    const tickets = tabBadge('checklist');
-    const n = state.building.length;
-    if (tickets) {
-      tickets.textContent = n ? n + ' building' : (state.tickets ? String(state.tickets) : '');
-      tickets.dataset.state = n ? 'building' : 'idle';
-      tickets.parentElement.title = n
-        ? 'Building: ' + state.building.map(t => (t.key || 'ticket') + ' ' + t.label.toLowerCase()).join(', ')
-        : state.tickets + (state.tickets === 1 ? ' ticket' : ' tickets');
-    }
-    const preview = tabBadge('preview');
-    if (preview) {
-      preview.textContent = '';
-      preview.dataset.state = 'dot-' + previewKind();
-      preview.parentElement.title = 'Preview: ' + PREVIEW_WORDS[previewKind()];
-    }
-  }
-  function segment(text, tab, label) {
-    const b = el('button', 'ws-seg'); b.type = 'button';
-    b.append(el('span', null, text));
-    b.title = label; b.setAttribute('aria-label', label);
-    b.addEventListener('click', () => openTab(tab));
+  function chip(id, icon, label, tab) {
+    const b = el('button', 'ws-chip');
+    b.type = 'button'; b.id = id; b.dataset.wsTab = tab; b.dataset.tip = label;
+    b.innerHTML = '<i class="fas ' + icon + '" aria-hidden="true"></i><span class="ws-chip-text"></span><span class="ws-chip-dot" aria-hidden="true"></span>';
+    b.setAttribute('aria-label', label);
+    b.addEventListener('click', () => goTo(tab));
     return b;
   }
-  function paintPill() {
+  function closeMenu() { document.getElementById('ws-more-menu')?.remove(); document.getElementById('ws-more')?.setAttribute('aria-expanded', 'false'); }
+  function toggleMenu(anchor) {
+    if (document.getElementById('ws-more-menu')) { closeMenu(); return; }
+    const m = el('div', 'ws-menu'); m.id = 'ws-more-menu'; m.setAttribute('role', 'menu');
+    for (const [tab, label, icon] of OTHER_TABS) {
+      if (!document.querySelector('.tab-button[data-tab="' + tab + '"]')) continue;
+      const it = el('button', 'ws-menu-item'); it.type = 'button'; it.setAttribute('role', 'menuitem');
+      it.innerHTML = '<i class="fas ' + icon + '" aria-hidden="true"></i>';
+      it.append(el('span', null, label));
+      if (panelOpen() && activeTab() === tab) it.classList.add('is-current');
+      it.addEventListener('click', () => { closeMenu(); goTo(tab); });
+      m.append(it);
+    }
+    m.append(el('div', 'ws-menu-sep'));
+    const toggle = el('button', 'ws-menu-item'); toggle.type = 'button'; toggle.setAttribute('role', 'menuitem');
+    toggle.innerHTML = '<i class="fas ' + (panelOpen() ? 'fa-angles-right' : 'fa-table-columns') + '" aria-hidden="true"></i>';
+    toggle.append(el('span', null, panelOpen() ? 'Hide panel' : 'Show panel'));
+    toggle.addEventListener('click', () => { closeMenu(); window.ArtifactsPanel?.toggle?.(); paintActive(); });
+    m.append(toggle);
+    document.body.append(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + 'px';
+    m.style.left = Math.max(8, r.right - m.offsetWidth) + 'px';
+    anchor.setAttribute('aria-expanded', 'true');
+    setTimeout(() => document.addEventListener('click', function off(e) { if (!m.contains(e.target) && !anchor.contains(e.target)) { closeMenu(); document.removeEventListener('click', off); } }), 0);
+  }
+  function ensureChips() {
     const actions = document.querySelector('.chat-header-actions');
-    if (!actions) return;
-    let pill = document.getElementById('ws-chips');
-    if (!pill) { pill = el('div', 'ws-pill'); pill.id = 'ws-chips'; actions.insertBefore(pill, actions.firstChild); }
-    const n = state.building.length;
-    const kind = previewKind();
-    const tickets = segment(n ? n + ' building' : 'Tickets ' + (state.tickets || 0), 'checklist', n ? 'Tickets: ' + n + ' building' : 'Open Tickets');
-    if (n) tickets.dataset.state = 'building';
-    const preview = segment('Preview', 'preview', 'Preview: ' + PREVIEW_WORDS[kind]);
-    preview.append(el('span', 'ws-dot'));
-    preview.dataset.state = kind;
-    pill.replaceChildren(segment('Docs ' + (state.docs || 0), 'filebrowser', 'Open Docs'), tickets, preview);
+    if (!actions || document.getElementById('ws-chips')) return !!actions;
+    const wrap = el('div', 'ws-chips'); wrap.id = 'ws-chips';
+    const more = el('button', 'ws-chip ws-more'); more.type = 'button'; more.id = 'ws-more';
+    more.innerHTML = '<i class="fas fa-ellipsis" aria-hidden="true"></i>';
+    more.dataset.tip = 'More: Boards, Evals, Git, Env, Notes';
+    more.setAttribute('aria-label', 'More: Boards, Evals, Git, Env, Notes, and show or hide the panel');
+    more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', () => toggleMenu(more));
+    wrap.append(chip('ws-docs', 'fa-file-lines', 'Docs', 'filebrowser'), chip('ws-tickets', 'fa-list-check', 'Tickets', 'checklist'), chip('ws-preview', 'fa-desktop', 'Preview', 'preview'), more);
+    actions.insertBefore(wrap, actions.firstChild);
+    // The ⋯ menu shows and hides the panel, so the separate panel icon goes.
+    const panelBtn = document.getElementById('artifacts-button');
+    if (panelBtn) panelBtn.style.display = 'none';
+    // Keep the highlighted icon in step with the panel, however it was opened or closed.
+    const art = document.getElementById('artifacts-panel');
+    if (art) new MutationObserver(paintActive).observe(art, { attributes: true, attributeFilter: ['class'] });
+    document.querySelector('.artifacts-tabs-list')?.addEventListener('click', () => setTimeout(paintActive, 0));
+    return true;
+  }
+  function paintActive() {
+    const open = panelOpen(), tab = activeTab();
+    document.querySelectorAll('#ws-chips .ws-chip[data-ws-tab]').forEach(b => b.classList.toggle('is-current', open && b.dataset.wsTab === tab));
+    document.getElementById('ws-more')?.classList.toggle('is-current', open && OTHER_TABS.some(t => t[0] === tab));
   }
   function paintChips() {
-    if (!state) return;
-    paintTabs(); paintPill();
+    if (!state || !ensureChips()) return;
+    const docs = document.getElementById('ws-docs');
+    docs.querySelector('.ws-chip-text').textContent = state.docs ? String(state.docs) : '';
+    docs.dataset.tip = 'Docs · ' + state.docs + (state.docs === 1 ? ' document' : ' documents');
+
+    const tickets = document.getElementById('ws-tickets');
+    const n = state.building.length;
+    tickets.dataset.state = n ? 'building' : 'idle';
+    tickets.querySelector('.ws-chip-text').textContent = n ? n + ' building' : (state.tickets ? String(state.tickets) : '');
+    tickets.dataset.tip = n
+      ? 'Tickets · building ' + state.building.map(t => t.key || 'ticket').join(', ')
+      : 'Tickets · ' + state.tickets + (state.tickets === 1 ? ' ticket' : ' tickets');
+
+    const preview = document.getElementById('ws-preview');
+    const p = String(state.preview || 'idle');
+    const kind = p === 'running' ? 'running' : p === 'error' ? 'error' : /^(detecting|provisioning|installing|seeding|starting)$/.test(p) ? 'starting' : 'idle';
+    preview.dataset.state = kind;
+    preview.dataset.tip = 'Preview · ' + ({ running: 'running', error: 'failed', starting: 'starting', idle: 'not running' })[kind];
+    for (const b of [docs, tickets, preview]) b.setAttribute('aria-label', b.dataset.tip);
+    paintActive();
   }
 
   // ── Build bar above the message box ──────────────────────────────────

@@ -44,7 +44,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-ticket-in-panel2" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-tab-counts" />
+  <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-icons-more" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261120-docedit" />
@@ -344,10 +344,10 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
-        <button class="tab-button" data-tab="boards">Boards</button>
-        <button class="tab-button" data-tab="evals">Evals</button>
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
+        <button class="tab-button" data-tab="boards">Boards</button>
+        <button class="tab-button" data-tab="evals">Evals</button>
         <button class="tab-button" data-tab="git">Git</button>
         <button class="tab-button" data-tab="env">Env</button>
         <button class="tab-button" data-tab="notes">Notes</button>
@@ -591,9 +591,9 @@ export function ChatPage({
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
-<script src="/public/js/preview-tab.js?v=20261121-one-restart"></script>
+<script src="/public/js/preview-tab.js?v=20261121-one-link"></script>
     <script src="/public/js/ticket-agent.js?v=20261121-ticket-in-panel"></script>
-  <script src="/public/js/workspace-status.js?v=20261121-tab-counts"></script>
+  <script src="/public/js/workspace-status.js?v=20261121-icons-more"></script>
   <script src="/public/js/env-tab.js?v=20261121-one-restart"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
