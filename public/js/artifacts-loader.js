@@ -3257,7 +3257,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             s = (s || 'open').toLowerCase();
                             if (/(done|complete|closed|merged)/.test(s)) return '#22c55e';
                             if (/(progress|building|active|running)/.test(s)) return '#3b82f6';
-                            if (/review/.test(s)) return '#a855f7';
+                            // Built and waiting for your review: green, like done, so the
+                            // list reads gray (todo) / blue (building) / green / red.
+                            if (/review/.test(s)) return '#22c55e';
                             if (/(block|fail)/.test(s)) return '#ef4444';
                             return isLightTheme ? '#cbd0d8' : '#5b6472';
                         };
@@ -3419,7 +3421,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}" data-in-group="${lfgCurGid}">
                                     <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
                                     ${lfgMarker}
-                                    ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
+                                    ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:${isLightTheme ? '#5b6472' : '#aab2bf'};background:${isLightTheme ? '#f1f3f5' : 'rgba(255,255,255,0.06)'};border:1px solid ${isLightTheme ? '#e3e6ea' : 'rgba(255,255,255,0.1)'};border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
                                     <span class="lfg-row-title" title="${modalHelpers.escapeHtml(item.name || 'Untitled Item')}">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</span>
                                     ${lfgBuildChip}
                                     <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
@@ -6788,7 +6790,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 '</div>';
 
             document.body.appendChild(overlay);
-            overlay.querySelector('#lfg-read-body').appendChild(source.cloneNode(true));
+            const readCopy = source.cloneNode(true);
+            // The live document is an editor; the read view is a quiet copy of it.
+            readCopy.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+            readCopy.removeAttribute('id');
+            overlay.querySelector('#lfg-read-body').appendChild(readCopy);
 
             // Wider measure and comfortable spacing for reading, scoped to the modal.
             const style = document.createElement('style');
@@ -7764,6 +7770,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     window.closeVersionDrawer();
                 }
 
+                // Save and close the document being edited before replacing it.
+                if (window.DocEditor) window.DocEditor.destroy();
+
                 // Show the viewer immediately with a loading state so the click feels
                 // responsive even when the content fetch is slow.
                 fileBrowserMain.style.display = 'none';
@@ -7897,15 +7906,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         });
                     }
                     
-                    // Reset editor state
-                    if (window.currentWysiwygEditor) {
-                        window.currentWysiwygEditor = null;
-                    }
                     window.currentFileData = {
                         fileId: fileId,
                         fileName: data.name || fileName,
                         content: data.content || '',
-                        type: data.type
+                        type: data.type,
+                        updatedAt: data.updatedAt || null
                     };
                     
                     // Render markdown content
@@ -7936,15 +7942,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         `;
                         
 
-                        // Edit button with full text
-                        const editButton = document.createElement('button');
-                        editButton.id = 'viewer-edit';
-                        editButton.style.cssText = buttonStyle + 'padding: 6px; gap: 6px;';
-                        editButton.innerHTML = '<i class="fas fa-edit"></i>';
-                        editButton.title = 'Edit full text';
-                        editButton.onmouseover = function() { this.style.color = 'var(--text-color)'; };
-                        editButton.onmouseout = function() { this.style.color = 'var(--text-secondary)'; };
-                        editButton.addEventListener('click', () => enableEditMode());
+                        // No Edit button: markdown documents are edited in place (DocEditor).
+                        // Raw markdown lives in the ⋮ menu as a fallback.
                         
                         // Copy button
                         const copyButton = document.createElement('button');
@@ -8179,6 +8178,19 @@ document.addEventListener('DOMContentLoaded', function() {
                             showVersionHistory(currentFileId);
                         });
                         
+                        // Raw markdown fallback — for text documents only, not page previews.
+                        if (data.type !== 'page_preview') {
+                            const rawOption = document.createElement('button');
+                            rawOption.style.cssText = versionOption.style.cssText;
+                            rawOption.innerHTML = '<i class="fas fa-file-code"></i> Edit markdown';
+                            rawOption.onmouseover = function() { this.style.background = '#2a2a2a'; };
+                            rawOption.onmouseout = function() { this.style.background = 'transparent'; };
+                            rawOption.addEventListener('click', () => {
+                                dropdownMenu.style.display = 'none';
+                                openRawMarkdownEditor();
+                            });
+                            dropdownMenu.appendChild(rawOption);
+                        }
                         dropdownMenu.appendChild(versionOption);
                         dropdownMenu.appendChild(downloadOption);
                         dropdownMenu.appendChild(deleteOption);
@@ -8215,7 +8227,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         // Append buttons to actions container
                         viewerActions.appendChild(readButton);
-                        viewerActions.appendChild(editButton);
                         viewerActions.appendChild(copyButton);
                         viewerActions.appendChild(optionsWrapper);
                         
@@ -8305,6 +8316,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Use marked.js if available, otherwise basic rendering
                         if (typeof marked !== 'undefined') {
                             viewerMarkdown.innerHTML = marked.parse(cleanedContent);
+                            // Swap the static render for the live editor once it loads; if
+                            // it can't, the rendered markdown above simply stays.
+                            if (window.DocEditor) {
+                                window.DocEditor.mount(viewerMarkdown, {
+                                    fileId: fileId,
+                                    projectId: projectId,
+                                    title: data.name || fileName,
+                                    type: data.type,
+                                    markdown: cleanedContent,
+                                    updatedAt: data.updatedAt || null,
+                                });
+                            }
                         } else {
                             // Simple markdown rendering
                             let renderedContent = escapeHtml(content);
@@ -8377,864 +8400,63 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             window.viewFileContent = viewFileContent;
             
-            // Auto-save functionality
-            let autoSaveTimer = null;
-            let hasUnsavedChanges = false;
-            
-            // Function to perform auto-save
-            const performAutoSave = async () => {
-                if (hasUnsavedChanges && window.currentWysiwygEditor) {
-                    await saveFileContent(true); // true indicates auto-save
-                    hasUnsavedChanges = false;
-                }
-            };
-            
-            // Start auto-save timer
-            const startAutoSave = () => {
-                // Clear existing timer
-                if (autoSaveTimer) {
-                    clearInterval(autoSaveTimer);
-                }
-                
-                // Set up auto-save every 15 seconds
-                autoSaveTimer = setInterval(performAutoSave, 15000);
-            };
-            
-            // Stop auto-save timer
-            const stopAutoSave = () => {
-                if (autoSaveTimer) {
-                    clearInterval(autoSaveTimer);
-                    autoSaveTimer = null;
-                }
-            };
-            
-            // Create auto-save indicator
-            const createAutoSaveIndicator = () => {
-                const indicator = document.createElement('span');
-                indicator.id = 'auto-save-indicator';
-                indicator.style.cssText = `
-                    display: none;
-                    margin-left: 15px;
-                    font-size: 14px;
-                    color: #10b981;
-                    font-weight: normal;
-                `;
-                
-                // Add to viewer header
-                const viewerTitle = document.getElementById('viewer-title');
-                if (viewerTitle && viewerTitle.parentElement) {
-                    viewerTitle.parentElement.appendChild(indicator);
-                }
-                
-                return indicator;
-            };
-            
-            // Enable edit mode with WYSIWYG editor
-            const enableEditMode = () => {
-                if (!window.currentFileData) return;
-                
+            // Raw markdown fallback (⋮ → Edit markdown). Documents are edited in place by
+            // DocEditor; this is for markup the rich editor doesn't model (HTML blocks,
+            // odd tables) and for plain-text files. Same autosave endpoint.
+            const openRawMarkdownEditor = () => {
+                const file = window.currentFileData;
                 const viewerMarkdown = document.getElementById('viewer-markdown');
-                const viewerContent = document.querySelector('.viewer-content');
-                const fileBrowserViewer = document.getElementById('filebrowser-viewer');
-                
-                if (!viewerMarkdown || !fileBrowserViewer) return;
-                
-                // Create container for WYSIWYG editor
-                const editorContainer = document.createElement('div');
-                editorContainer.id = 'wysiwyg-editor';
-                editorContainer.style.cssText = 'flex: 1; height: calc(100% - 60px); position: relative;';
-                
-                // Hide the viewer-content to avoid nested scrolling
-                if (viewerContent) {
-                    viewerContent.style.display = 'none';
-                }
-                
-                // Insert editor directly in the viewer, after header
-                const viewerHeader = fileBrowserViewer.querySelector('.viewer-header');
-                if (viewerHeader && viewerHeader.nextSibling) {
-                    fileBrowserViewer.insertBefore(editorContainer, viewerHeader.nextSibling);
-                } else {
-                    fileBrowserViewer.appendChild(editorContainer);
-                }
-                
-                // Load Jodit editor if not already loaded
-                if (!window.Jodit) {
-                    // Load Jodit CSS
-                    const joditCss = document.createElement('link');
-                    joditCss.rel = 'stylesheet';
-                    joditCss.href = 'https://unpkg.com/jodit@3.24.9/build/jodit.min.css';
-                    document.head.appendChild(joditCss);
-                    
-                    // Load Jodit JS
-                    const joditScript = document.createElement('script');
-                    joditScript.src = 'https://unpkg.com/jodit@3.24.9/build/jodit.min.js';
-                    joditScript.onload = () => {
-                        setTimeout(() => initializeWysiwygEditor(), 100);
-                    };
-                    document.head.appendChild(joditScript);
-                } else {
-                    // Initialize editor immediately
-                    initializeWysiwygEditor();
-                }
-                
-                // Hide all viewer buttons
-                const editButton = document.getElementById('viewer-edit');
-                const copyButton = document.getElementById('viewer-copy');
-                const versionButton = document.getElementById('viewer-versions');
-                const optionsButton = document.getElementById('viewer-options');
-                
-                if (editButton) editButton.style.display = 'none';
-                if (copyButton) copyButton.style.display = 'none';
-                if (versionButton) versionButton.style.display = 'none';
-                if (optionsButton) optionsButton.style.display = 'none';
-                
-                // Add save and cancel buttons
-                let saveButton = document.getElementById('viewer-save');
-                let cancelButton = document.getElementById('viewer-cancel');
-                
-                if (!saveButton) {
-                    saveButton = document.createElement('button');
-                    saveButton.id = 'viewer-save';
-                    saveButton.className = 'btn btn-sm';
-                    saveButton.style = 'padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px;';
-                    saveButton.innerHTML = '<i class="fas fa-save"></i> Save';
-                    saveButton.title = 'Save changes';
-                    saveButton.addEventListener('click', () => saveFileContent());
-                    const viewerActions = document.getElementById('viewer-actions');
-                    if (viewerActions) viewerActions.appendChild(saveButton);
-                }
-                
-                if (!cancelButton) {
-                    cancelButton = document.createElement('button');
-                    cancelButton.id = 'viewer-cancel';
-                    cancelButton.className = 'btn btn-sm';
-                    cancelButton.style = 'padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer; margin-left: 10px; display: flex; align-items: center; gap: 6px;';
-                    cancelButton.innerHTML = '<i class="fas fa-times"></i> Cancel';
-                    cancelButton.title = 'Cancel editing';
-                    cancelButton.addEventListener('click', () => cancelEditMode());
-                    const viewerActionsForCancel = document.getElementById('viewer-actions');
-                    if (viewerActionsForCancel) viewerActionsForCancel.appendChild(cancelButton);
-                }
-                
-                saveButton.style.display = 'inline-block';
-                cancelButton.style.display = 'inline-block';
-            };
-            
-            // Initialize the WYSIWYG editor
-            const initializeWysiwygEditor = () => {
-                const editorContainer = document.getElementById('wysiwyg-editor');
-                if (!editorContainer) return;
-                
-                // Clear the container
-                editorContainer.innerHTML = '';
-                
-                // Create textarea for Jodit
-                const textarea = document.createElement('textarea');
-                textarea.id = 'jodit-editor';
-                editorContainer.appendChild(textarea);
-                
-                // Convert markdown to HTML
-                let initialHTML = window.currentFileData.content;
-                if (window.marked) {
-                    marked.setOptions({
-                        gfm: true,
-                        breaks: true,
-                        tables: true
-                    });
-                    initialHTML = marked.parse(window.currentFileData.content);
-                }
-                
-                // Calculate height to fill the entire viewer area
-                const viewerContainer = document.getElementById('filebrowser-viewer');
-                const viewerHeader = viewerContainer ? viewerContainer.querySelector('.viewer-header') : null;
-                const headerHeight = viewerHeader ? viewerHeader.offsetHeight : 60;
-                // Subtract header height and some padding
-                const viewerHeight = viewerContainer ? viewerContainer.offsetHeight - headerHeight - 20 : 600;
-                
-                // Initialize Jodit with dark theme
-                try {
-                    window.currentWysiwygEditor = Jodit.make('#jodit-editor', {
-                    theme: 'dark',
-                    height: '100%',
-                    minHeight: 400,
-                    toolbarSticky: true,
-                    toolbarStickyOffset: 0,
-                    showCharsCounter: false,
-                    showWordsCounter: false,
-                    showXPathInStatusbar: false,
-                    // Add keyboard shortcuts
-                    hotkeys: {
-                        'ctrl+s,cmd+s': function(editor) {
-                            saveFileContent();
-                            return false; // Prevent default browser save
-                        }
-                    },
-                    buttons: [
-                        'bold', 'italic', 'underline', 'strikethrough', '|',
-                        'ul', 'ol', '|',
-                        'font', 'fontsize', 'paragraph', '|',
-                        'table', 'link', 'image', '|',
-                        'align', '|',
-                        'undo', 'redo', '|',
-                        'eraser', 'fullsize'
-                    ],
-                    buttonsMD: [
-                        'bold', 'italic', 'underline', '|',
-                        'ul', 'ol', '|',
-                        'table', 'link', '|',
-                        'dots'
-                    ],
-                    buttonsXS: [
-                        'bold', 'italic', '|',
-                        'ul', 'ol', '|',
-                        'dots'
-                    ],
-                    style: {
-                        background: '#1a1a1a',
-                        color: '#e2e8f0'
-                    },
-                    editorCssClass: 'dark-editor',
-                    toolbarAdaptive: false,
-                    enter: 'p',
-                    defaultMode: Jodit.MODE_WYSIWYG,
-                    useSplitMode: false,
-                    colors: {
-                        greyscale: ['#000000', '#434343', '#666666', '#999999', '#B7B7B7', '#CCCCCC', '#D9D9D9', '#EFEFEF', '#F3F3F3', '#FFFFFF'],
-                        palette: ['#8B5CF6', '#60A5FA', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#8B5CF6', '#3B82F6', '#06B6D4', '#84CC16']
-                    },
-                    controls: {
-                        font: {
-                            list: {
-                                "'Open Sans', sans-serif": 'Open Sans',
-                                'Helvetica, sans-serif': 'Helvetica',
-                                'Arial, sans-serif': 'Arial',
-                                'Georgia, serif': 'Georgia',
-                                'Impact, sans-serif': 'Impact',
-                                'Tahoma, sans-serif': 'Tahoma',
-                                'Verdana, sans-serif': 'Verdana'
-                            }
-                        }
-                    },
-                    events: {
-                        afterInit: function(editor) {
-                            // Ensure text color persists
-                            editor.editor.style.color = '#e2e8f0';
-                            editor.editor.style.backgroundColor = '#1a1a1a';
-                            
-                            // Also set default paragraph style
-                            const style = editor.createInside.element('style');
-                            style.innerHTML = `
-                                * { color: #e2e8f0 !important; }
-                                p { color: #e2e8f0 !important; }
-                                div { color: #e2e8f0 !important; }
-                                span { color: #e2e8f0 !important; }
-                            `;
-                            editor.editor.appendChild(style);
-                        },
-                        change: function() {
-                            // Mark as having unsaved changes
-                            hasUnsavedChanges = true;
-                            // Keep text color on change
-                            const editor = this.editor;
-                            if (editor) {
-                                const walker = document.createTreeWalker(
-                                    editor,
-                                    NodeFilter.SHOW_ELEMENT,
-                                    null,
-                                    false
-                                );
-                                
-                                let node;
-                                while (node = walker.nextNode()) {
-                                    if (!node.style.color || node.style.color === '') {
-                                        node.style.color = '#e2e8f0';
-                                    }
-                                }
-                            }
-                        },
-                        beforeEnter: function() {
-                            // Ensure new paragraphs have the right color
-                            const selection = this.selection;
-                            if (selection.current()) {
-                                const current = selection.current();
-                                if (current && current.style) {
-                                    current.style.color = '#e2e8f0';
-                                }
-                            }
-                        }
-                    }
-                });
-                } catch (error) {
-                    console.error('[ArtifactsLoader] Error initializing Jodit editor:', error);
-                    if (error.message && error.message.includes('plugin')) {
-                        showToast('Editor initialization error: ' + error.message, 'error');
-                    } else {
-                        showToast('Failed to initialize editor', 'error');
-                    }
-                    // Fallback to textarea
-                    const fallbackTextarea = document.createElement('textarea');
-                    fallbackTextarea.id = 'fallback-editor';
-                    fallbackTextarea.className = 'artifact-editor';
-                    fallbackTextarea.value = window.currentFileData.content;
-                    fallbackTextarea.style.cssText = 'width: 100%; height: ' + viewerHeight + 'px; background: #1a1a1a; color: #e2e8f0; border: 1px solid #333; padding: 20px; font-family: monospace;';
-                    editorContainer.innerHTML = '';
-                    editorContainer.appendChild(fallbackTextarea);
-                    window.currentWysiwygEditor = {
-                        value: fallbackTextarea.value,
-                        get value() { return fallbackTextarea.value; },
-                        set value(val) { fallbackTextarea.value = val; }
-                    };
-                    return;
-                }
-                
-                // Set initial content
-                window.currentWysiwygEditor.value = initialHTML;
-                
-                // Start auto-save timer
-                startAutoSave();
-                
-                // Reset unsaved changes flag
-                hasUnsavedChanges = false;
-                
-                // Force text color after content is set
-                setTimeout(() => {
-                    const editorBody = window.currentWysiwygEditor.editor;
-                    if (editorBody) {
-                        editorBody.style.color = '#e2e8f0';
-                        // Apply color to all existing elements
-                        const allElements = editorBody.querySelectorAll('*');
-                        allElements.forEach(el => {
-                            if (!el.style.color || el.style.color === '') {
-                                el.style.color = '#e2e8f0';
-                            }
-                        });
-                    }
-                }, 100);
-                
-                // Apply custom dark theme styles
-                const style = document.createElement('style');
-                style.textContent = `
-                    /* Jodit Dark Theme Overrides */
-                    .jodit-container:not(.jodit_inline) {
-                        border: 1px solid #333 !important;
-                        background: #1a1a1a !important;
-                        height: 100% !important;
-                    }
-                    
-                    .jodit-toolbar__box {
-                        background: #2a2a2a !important;
-                        border-bottom: 1px solid #333 !important;
-                    }
-                    
-                    .jodit-toolbar-button {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-toolbar-button:hover {
-                        background: #333 !important;
-                    }
-                    
-                    .jodit-toolbar-button:active,
-                    .jodit-toolbar-button[aria-pressed="true"] {
-                        background: #8b5cf6 !important;
-                    }
-                    
-                    .jodit-wysiwyg {
-                        background: #1a1a1a !important;
-                        color: #e2e8f0 !important;
-                        padding: 20px !important;
-                        min-height: calc(100% - 60px) !important;
-                        line-height: 1.6 !important;
-                    }
-                    
-                    /* Fix list formatting */
-                    .jodit-wysiwyg ul,
-                    .jodit-wysiwyg ol {
-                        margin: 1em 0 !important;
-                        padding-left: 2em !important;
-                        line-height: 1.6 !important;
-                    }
-                    
-                    .jodit-wysiwyg li {
-                        margin: 0.5em 0 !important;
-                        line-height: 1.6 !important;
-                    }
-                    
-                    /* Fix paragraph spacing */
-                    .jodit-wysiwyg p {
-                        margin: 1em 0 !important;
-                        line-height: 1.6 !important;
-                    }
-                    
-                    /* Fix heading spacing */
-                    .jodit-wysiwyg h1,
-                    .jodit-wysiwyg h2,
-                    .jodit-wysiwyg h3,
-                    .jodit-wysiwyg h4,
-                    .jodit-wysiwyg h5,
-                    .jodit-wysiwyg h6 {
-                        margin-top: 1.5em !important;
-                        margin-bottom: 0.5em !important;
-                        line-height: 1.3 !important;
-                    }
-                    
-                    /* First heading should not have top margin */
-                    .jodit-wysiwyg > h1:first-child,
-                    .jodit-wysiwyg > h2:first-child,
-                    .jodit-wysiwyg > h3:first-child {
-                        margin-top: 0 !important;
-                    }
-                    
-                    .jodit-wysiwyg,
-                    .jodit-wysiwyg * {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg p,
-                    .jodit-wysiwyg div,
-                    .jodit-wysiwyg span {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg h1,
-                    .jodit-wysiwyg h2,
-                    .jodit-wysiwyg h3,
-                    .jodit-wysiwyg h4,
-                    .jodit-wysiwyg h5,
-                    .jodit-wysiwyg h6 {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg table {
-                        border-collapse: collapse !important;
-                        width: 100% !important;
-                        margin: 1.5em 0 !important;
-                    }
-                    
-                    .jodit-wysiwyg table td,
-                    .jodit-wysiwyg table th {
-                        border: 1px solid #444 !important;
-                        padding: 10px 15px !important;
-                        color: #e2e8f0 !important;
-                        line-height: 1.5 !important;
-                        vertical-align: top !important;
-                    }
-                    
-                    .jodit-wysiwyg table th {
-                        background: #2a2a2a !important;
-                        font-weight: bold !important;
-                    }
-                    
-                    .jodit-wysiwyg blockquote {
-                        border-left: 4px solid #8b5cf6 !important;
-                        background: rgba(139, 92, 246, 0.1) !important;
-                        padding: 10px 20px !important;
-                        margin: 10px 0 !important;
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg pre {
-                        background: #0a0a0a !important;
-                        border: 1px solid #333 !important;
-                        border-radius: 4px !important;
-                        padding: 1em !important;
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg code {
-                        background: #2a2a2a !important;
-                        color: #e2e8f0 !important;
-                        padding: 0.2em 0.4em !important;
-                        border-radius: 3px !important;
-                    }
-                    
-                    .jodit-wysiwyg a {
-                        color: #60a5fa !important;
-                    }
-                    
-                    /* Status bar */
-                    .jodit-status-bar {
-                        background: #2a2a2a !important;
-                        border-top: 1px solid #333 !important;
-                        color: #9ca3af !important;
-                    }
-                    
-                    /* Popup and dropdown styles */
-                    .jodit-popup__content {
-                        background: #2a2a2a !important;
-                        border: 1px solid #444 !important;
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-dropdown__content {
-                        background: #2a2a2a !important;
-                        border: 1px solid #444 !important;
-                    }
-                    
-                    .jodit-dropdown__item {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-dropdown__item:hover {
-                        background: #333 !important;
-                    }
-                    
-                    /* Table selector */
-                    .jodit-toolbar-button__button[aria-controls*="table"] {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    /* Color picker */
-                    .jodit-color-picker__box {
-                        background: #2a2a2a !important;
-                        border: 1px solid #444 !important;
-                    }
-                    
-                    /* Icons */
-                    .jodit-icon {
-                        fill: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-toolbar-button:hover .jodit-icon {
-                        fill: #fff !important;
-                    }
-                    
-                    .jodit-toolbar-button[aria-pressed="true"] .jodit-icon {
-                        fill: #fff !important;
-                    }
-                `;
-                document.head.appendChild(style);
-                
-                // Focus the editor
-                window.currentWysiwygEditor.focus();
-                
-                // Additional style injection to ensure visibility
-                const additionalStyles = document.createElement('style');
-                additionalStyles.textContent = `
-                    .jodit-wysiwyg[contenteditable="true"] {
-                        color: #e2e8f0 !important;
-                    }
-                    
-                    .jodit-wysiwyg[contenteditable="true"] * {
-                        color: inherit !important;
-                    }
-                    
-                    /* Force text color for all possible elements */
-                    .jodit-wysiwyg p,
-                    .jodit-wysiwyg div,
-                    .jodit-wysiwyg span,
-                    .jodit-wysiwyg h1,
-                    .jodit-wysiwyg h2,
-                    .jodit-wysiwyg h3,
-                    .jodit-wysiwyg h4,
-                    .jodit-wysiwyg h5,
-                    .jodit-wysiwyg h6,
-                    .jodit-wysiwyg li,
-                    .jodit-wysiwyg td,
-                    .jodit-wysiwyg th,
-                    .jodit-wysiwyg a,
-                    .jodit-wysiwyg strong,
-                    .jodit-wysiwyg em,
-                    .jodit-wysiwyg u,
-                    .jodit-wysiwyg s {
-                        color: #e2e8f0 !important;
-                    }
-                `;
-                document.head.appendChild(additionalStyles);
-            };
-            
-            
-            // Save file content
-            const saveFileContent = async (isAutoSave = false) => {
-                if (!window.currentWysiwygEditor || !window.currentFileData) {
-                    console.error('[ArtifactsLoader] Missing editor or file data');
-                    return;
-                }
-                
-                // Get project ID
                 const projectId = getCurrentProjectId();
-                if (!projectId) {
-                    console.error('[ArtifactsLoader] No project ID available');
-                    showToast('Error: No project ID available', 'error');
-                    return;
-                }
-                
-                // Show saving indicator
-                const saveButton = document.getElementById('viewer-save');
-                let originalText = saveButton ? saveButton.innerHTML : '';
-                
-                if (isAutoSave) {
-                    // For auto-save, show a subtle indicator
-                    const autoSaveIndicator = document.getElementById('auto-save-indicator') || createAutoSaveIndicator();
-                    autoSaveIndicator.style.display = 'inline-block';
-                    autoSaveIndicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Auto-saving...';
-                } else {
-                    // For manual save, update the save button
-                    if (saveButton) {
-                        originalText = saveButton.innerHTML;
-                        saveButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-                        saveButton.disabled = true;
-                    }
-                }
-                
-                try {
-                    // Get HTML content from Jodit editor
-                    const htmlContent = window.currentWysiwygEditor.value;
-                    
-                    // Convert HTML back to markdown
-                    let content = htmlContent;
-                    
-                    // Load Turndown if not available for better conversion
-                    if (!window.TurndownService) {
-                        // Load Turndown dynamically
-                        await new Promise((resolve) => {
-                            const script = document.createElement('script');
-                            script.src = 'https://unpkg.com/turndown/dist/turndown.js';
-                            script.onload = resolve;
-                            document.head.appendChild(script);
-                        });
-                    }
-                    
-                    if (window.TurndownService) {
-                        const turndownService = new TurndownService({
-                            headingStyle: 'atx',
-                            codeBlockStyle: 'fenced',
-                            bulletListMarker: '-'
-                        });
-                        
-                        // Add table support using the correct plugin format
-                        turndownService.use(function(service) {
-                            service.addRule('table', {
-                                filter: 'table',
-                                replacement: function(content, node) {
-                                    // Convert HTML table back to markdown table
-                                    const rows = Array.from(node.querySelectorAll('tr'));
-                                    if (rows.length === 0) return '';
-                                    
-                                    let markdown = '';
-                                    rows.forEach((row, index) => {
-                                        const cells = Array.from(row.querySelectorAll('td, th'));
-                                        markdown += '| ' + cells.map(cell => cell.textContent.trim()).join(' | ') + ' |\n';
-                                        
-                                        // Add separator after header row
-                                        if (index === 0) {
-                                            markdown += '|' + cells.map(() => '---').join('|') + '|\n';
-                                        }
-                                    });
-                                    
-                                    return '\n' + markdown + '\n';
-                                }
-                            });
-                        });
-                        
-                        content = turndownService.turndown(htmlContent);
-                    } else {
-                        // Simple HTML to markdown conversion
-                        content = htmlContent
-                            .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n')
-                            .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n')
-                            .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n')
-                            .replace(/<h4[^>]*>(.*?)<\/h4>/gi, '#### $1\n')
-                            .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
-                            .replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**')
-                            .replace(/<em[^>]*>(.*?)<\/em>/gi, '*$1*')
-                            .replace(/<i[^>]*>(.*?)<\/i>/gi, '*$1*')
-                            .replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, function(match, content) {
-                                return content.replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n');
-                            })
-                            .replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, function(match, content) {
-                                let counter = 1;
-                                return content.replace(/<li[^>]*>(.*?)<\/li>/gi, function(m, text) {
-                                    return (counter++) + '. ' + text + '\n';
-                                });
-                            })
-                            .replace(/<blockquote[^>]*>(.*?)<\/blockquote>/gi, '> $1\n')
-                            .replace(/<br[^>]*>/gi, '\n')
-                            .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n\n')
-                            .replace(/<[^>]+>/g, '')
-                            .replace(/\n{3,}/g, '\n\n')
-                            .trim();
-                    }
-                    
-                    const { fileId, fileName, type } = window.currentFileData;
-                    
-                    // Determine the correct API endpoint based on file type
-                    let url, method, body;
-                    
-                    if (type === 'prd') {
-                        url = `/projects/${projectId}/api/prd?prd_name=${encodeURIComponent(fileName)}`;
-                        method = 'POST';
-                        body = JSON.stringify({ content: content });
-                    } else if (type === 'implementation') {
-                        url = `/projects/${projectId}/api/implementation`;
-                        method = 'POST';
-                        body = JSON.stringify({ content: content });
-                    } else {
-                        // For other file types, use the generic files API
-                        // The type should match the file_type in the model (e.g., 'design', 'test', 'other')
-                        const fileType = type || 'other';
-                        url = `/projects/${projectId}/api/files?type=${fileType}&name=${encodeURIComponent(fileName)}`;
-                        method = 'POST';
-                        body = JSON.stringify({ content: content });
-                    }
-                    
-                    
-                    const response = await fetch(url, {
-                        method: method,
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': getCsrfToken(),
-                        },
-                        body: body
+                if (!file || !viewerMarkdown || !projectId) return;
+                const fileId = file.fileId;
+                const done = () => viewFileContent(fileId, file.fileName);
+                (window.DocEditor ? window.DocEditor.destroy() : Promise.resolve()).then(() => {
+                    if (!window.currentFileData || window.currentFileData.fileId !== fileId) return;
+                    const wrap = document.createElement('div');
+                    wrap.className = 'doc-raw-editor';
+                    wrap.innerHTML =
+                        '<div class="doc-raw-bar"><span>Markdown</span>' +
+                        '<span class="doc-raw-status" aria-live="polite"></span>' +
+                        '<button type="button" class="doc-raw-done">Done</button></div>';
+                    const ta = document.createElement('textarea');
+                    ta.className = 'doc-raw-textarea';
+                    ta.spellcheck = false;
+                    ta.value = window.currentFileData.content || '';
+                    wrap.appendChild(ta);
+                    viewerMarkdown.innerHTML = '';
+                    viewerMarkdown.appendChild(wrap);
+                    const status = wrap.querySelector('.doc-raw-status');
+                    let timer = null, saving = Promise.resolve(), dirty = false;
+                    const save = () => {
+                        if (timer) { clearTimeout(timer); timer = null; }
+                        if (!dirty) return saving;
+                        dirty = false;
+                        const content = ta.value;
+                        status.textContent = 'Saving…';
+                        saving = saving.then(() => fetch(`/projects/${projectId}/api/files/${fileId}/content`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                            body: JSON.stringify({ content, baseUpdatedAt: window.currentFileData.updatedAt }),
+                        }).then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))).then(({ ok, status: code, d }) => {
+                            if (!ok) throw new Error(code === 409 ? 'Changed elsewhere — reopen to see it' : (d.error || 'Not saved'));
+                            window.currentFileData.content = content;
+                            window.currentFileData.updatedAt = d.updatedAt || window.currentFileData.updatedAt;
+                            if (!dirty) status.textContent = 'Saved';
+                        }).catch(err => { dirty = true; status.textContent = err.message || 'Not saved'; });
+                        return saving;
+                    };
+                    ta.addEventListener('input', () => {
+                        dirty = true;
+                        status.textContent = 'Editing…';
+                        if (timer) clearTimeout(timer);
+                        timer = setTimeout(save, 1200);
                     });
-                    
-                    
-                    let data;
-                    try {
-                        data = await response.json();
-                    } catch (e) {
-                        console.error('[ArtifactsLoader] Failed to parse response:', e);
-                        data = { success: false, error: 'Failed to parse server response' };
-                    }
-                    
-                    if (data.success || response.ok) {
-                        // Show toast with proper function
-                        if (isAutoSave) {
-                            // For auto-save, show subtle indicator
-                            const autoSaveIndicator = document.getElementById('auto-save-indicator');
-                            if (autoSaveIndicator) {
-                                autoSaveIndicator.innerHTML = '<i class="fas fa-check"></i> Auto-saved';
-                                setTimeout(() => {
-                                    autoSaveIndicator.style.display = 'none';
-                                }, 2000);
-                            }
-                        } else {
-                            // For manual save, show toast
-                            if (typeof showToast === 'function') {
-                                showToast('File saved successfully', 'success');
-                            } else if (window.showToast && typeof window.showToast === 'function') {
-                                window.showToast('File saved successfully', 'success');
-                            } else {
-                                alert('File saved successfully');
-                            }
-                        }
-                        window.currentFileData.content = content;
-                        
-                        // Also save the file ID if it was created
-                        if (data.file_id) {
-                            window.currentFileData.fileId = data.file_id;
-                        }
-                        
-                        // Exit edit mode and refresh view (only for manual save)
-                        if (!isAutoSave) {
-                            cancelEditMode(true);
-                        }
-                    } else {
-                        console.error('[ArtifactsLoader] Save error:', data);
-                        const errorMsg = 'Failed to save file: ' + (data.error || 'Unknown error');
-                        
-                        if (isAutoSave) {
-                            console.error('[AutoSave] Auto-save failed:', errorMsg);
-                            const autoSaveIndicator = document.getElementById('auto-save-indicator');
-                            if (autoSaveIndicator) {
-                                autoSaveIndicator.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Auto-save failed';
-                                autoSaveIndicator.style.color = '#ef4444';
-                                setTimeout(() => {
-                                    autoSaveIndicator.style.display = 'none';
-                                    autoSaveIndicator.style.color = '';
-                                }, 3000);
-                            }
-                        } else {
-                            if (typeof showToast === 'function') {
-                                showToast(errorMsg, 'error');
-                            } else if (window.showToast && typeof window.showToast === 'function') {
-                                window.showToast(errorMsg, 'error');
-                            } else {
-                                alert(errorMsg);
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('[ArtifactsLoader] Error saving file:', error);
-                    const errorMsg = 'Failed to save file: ' + error.message;
-                    
-                    if (isAutoSave) {
-                        console.error('[AutoSave] Auto-save error:', error);
-                        const autoSaveIndicator = document.getElementById('auto-save-indicator');
-                        if (autoSaveIndicator) {
-                            autoSaveIndicator.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Auto-save failed';
-                            autoSaveIndicator.style.color = '#ef4444';
-                            setTimeout(() => {
-                                autoSaveIndicator.style.display = 'none';
-                                autoSaveIndicator.style.color = '';
-                            }, 3000);
-                        }
-                    } else {
-                        if (typeof showToast === 'function') {
-                            showToast(errorMsg, 'error');
-                        } else if (window.showToast && typeof window.showToast === 'function') {
-                            window.showToast(errorMsg, 'error');
-                        } else {
-                            alert(errorMsg);
-                        }
-                    }
-                } finally {
-                    if (!isAutoSave && saveButton) {
-                        saveButton.innerHTML = originalText;
-                        saveButton.disabled = false;
-                    }
-                }
+                    ta.addEventListener('blur', save);
+                    wrap.querySelector('.doc-raw-done').addEventListener('click', () => save().then(done));
+                    ta.focus();
+                });
             };
-            
-            // Cancel edit mode
-            const cancelEditMode = (skipConfirm = false) => {
-                if (!skipConfirm && window.currentWysiwygEditor && hasUnsavedChanges) {
-                    if (!confirm('Are you sure you want to cancel? Any unsaved changes will be lost.')) {
-                        return;
-                    }
-                }
-                
-                // Stop auto-save timer
-                stopAutoSave();
-                
-                // Clear reference
-                if (window.currentWysiwygEditor) {
-                    window.currentWysiwygEditor = null;
-                }
-                
-                // Remove the editor container
-                const editorContainer = document.getElementById('wysiwyg-editor');
-                if (editorContainer) {
-                    editorContainer.remove();
-                }
-                
-                // Show the viewer-content again
-                const viewerContent = document.querySelector('.viewer-content');
-                if (viewerContent) {
-                    viewerContent.style.display = '';
-                }
-                
-                // Hide save/cancel buttons
-                const saveButton = document.getElementById('viewer-save');
-                const cancelButton = document.getElementById('viewer-cancel');
-                if (saveButton) saveButton.style.display = 'none';
-                if (cancelButton) cancelButton.style.display = 'none';
-                
-                // Show original buttons
-                const editButton = document.getElementById('viewer-edit');
-                const copyButton = document.getElementById('viewer-copy');
-                const versionButton = document.getElementById('viewer-versions');
-                const optionsButton = document.getElementById('viewer-options');
-                if (editButton) editButton.style.display = 'flex';
-                if (copyButton) copyButton.style.display = 'flex';
-                if (versionButton) versionButton.style.display = 'flex';
-                if (optionsButton) optionsButton.style.display = 'flex';
-                
-                // Refresh the file view
-                if (window.currentFileData) {
-                    viewFileContent(window.currentFileData.fileId, window.currentFileData.fileName);
-                }
-            };
+
             
             // Show version history in side drawer
             const showVersionHistory = async (fileId) => {
@@ -9883,51 +9105,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // Viewer event listeners
             if (viewerBack) {
                 viewerBack.addEventListener('click', async function() {
-                    // Check if we're in edit mode with unsaved changes
-                    if (window.currentWysiwygEditor && hasUnsavedChanges) {
-                        // Auto-save before going back
-                        await saveFileContent(true); // true for auto-save
-                    }
-                    
-                    // If still in edit mode, cancel it without refreshing
-                    if (window.currentWysiwygEditor) {
-                        // Stop auto-save timer
-                        if (window.autoSaveTimer) {
-                            clearInterval(window.autoSaveTimer);
-                            window.autoSaveTimer = null;
-                        }
-                        
-                        // Clear reference
-                        window.currentWysiwygEditor = null;
-                        
-                        // Remove the editor container
-                        const editorContainer = document.getElementById('wysiwyg-editor');
-                        if (editorContainer) {
-                            editorContainer.remove();
-                        }
-                        
-                        // Show viewer content again
-                        const viewerContent = document.querySelector('.viewer-content');
-                        if (viewerContent) {
-                            viewerContent.style.display = '';
-                        }
-                        
-                        // Hide save/cancel buttons
-                        const saveButton = document.getElementById('viewer-save');
-                        const cancelButton = document.getElementById('viewer-cancel');
-                        if (saveButton) saveButton.style.display = 'none';
-                        if (cancelButton) cancelButton.style.display = 'none';
-                        
-                        // Show original buttons
-                        const editButton = document.getElementById('viewer-edit');
-                        const copyButton = document.getElementById('viewer-copy');
-                        const versionButton = document.getElementById('viewer-versions');
-                        const optionsButton = document.getElementById('viewer-options');
-                        if (editButton) editButton.style.display = 'flex';
-                        if (copyButton) copyButton.style.display = 'flex';
-                        if (versionButton) versionButton.style.display = 'flex';
-                        if (optionsButton) optionsButton.style.display = 'flex';
-                    }
+                    // Save any pending in-place edit and tear the editor down.
+                    if (window.DocEditor) await window.DocEditor.destroy();
                     
                     // Navigate back to file list
                     fileBrowserViewer.style.display = 'none';

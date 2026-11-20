@@ -6,4 +6,5 @@ const m = (process.env.DATABASE_DRIVER === "postgresql" ? pg : sq) as S;
 
 export const projectFiles = m.projectFiles;
 export const projectFileVersions = m.projectFileVersions;
+export const documentEdits = m.documentEdits;
 export const toolCallHistory = m.toolCallHistory;

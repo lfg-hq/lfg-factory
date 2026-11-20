@@ -6,9 +6,12 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { projectFiles, projectFileVersions } from "../../db/schema/documents.ts";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, asc, isNull } from "drizzle-orm";
 import { emitFileCreated, emitFileUpdated } from "../../events/emitters.ts";
 import { saveContent, getContent } from "../../services/s3.ts";
+import { recordDocumentEdit, listDocumentEdits, lastEditSummary } from "../../services/document-edits.ts";
+import { documentComments } from "../../db/schema/comments.ts";
+import { users } from "../../db/schema/users.ts";
 import { composeDesignPreview } from "../../services/design-preview.ts";
 import { linkDocsToEpic } from "../../services/epics.ts";
 
@@ -29,7 +32,10 @@ async function preserveDocumentVersion(file: {id: string; s3Key: string | null; 
     const saved = await db.insert(projectFileVersions).values({fileId: file.id, versionNumber: (latest?.version ?? 0) + 1,
       content: previous, createdById: userId, changeDescription: "Agent revision"})
       .onConflictDoNothing().returning({version: projectFileVersions.versionNumber});
-    if (saved.length) return saved[0]!.version;
+    if (saved.length) {
+      await recordDocumentEdit({ fileId: file.id, userId, source: "agent", baseVersion: saved[0]!.version, before: previous, after: nextContent });
+      return saved[0]!.version;
+    }
   }
   throw new Error("Could not preserve the previous document version. Please retry.");
 }
@@ -227,13 +233,63 @@ export const getFileContent = tool({
     if (!file) return { found: false as const };
     await associateUsageDocument(file.id, options.toolCallId);
     const content = await getContent(file.s3Key, file.content);
+    const openComments = (await db.select({ id: documentComments.id }).from(documentComments)
+      .where(and(eq(documentComments.fileId, file.id), eq(documentComments.isResolved, false), isNull(documentComments.parentId)))).length;
+    const lastEdit = await lastEditSummary(file.id);
     return {
       found: true as const,
       id: file.id,
       name: file.name,
       fileType: file.fileType,
       content,
+      // Pointers so the agent knows when to look further.
+      openComments,
+      ...(openComments ? { commentsHint: "Use getDocumentComments to read the open comments on this document." } : {}),
+      ...(lastEdit ? { lastEdit, editsHint: "Use getDocumentChanges to see who changed what (with a diff)." } : {}),
     };
+  },
+});
+
+// ── getDocumentComments ───────────────────────────────────────────────────────
+
+export const getDocumentComments = tool({
+  description:
+    "Read the comments people left on a project document: the quoted passage each comment is about, " +
+    "who wrote it, when, replies, and whether it's resolved. Use it when asked about feedback or comments " +
+    "on a document, or before revising a document that has open comments.",
+  inputSchema: zodSchema(z.object({
+    fileId: z.string(),
+    includeResolved: z.boolean().optional().describe("Also return resolved comments (default false)"),
+  })),
+  execute: async ({ fileId, includeResolved }) => {
+    const rows = await db.select({
+      id: documentComments.id, parentId: documentComments.parentId, quote: documentComments.selectedText,
+      comment: documentComments.content, resolved: documentComments.isResolved,
+      createdAt: documentComments.createdAt, author: users.name,
+    }).from(documentComments).leftJoin(users, eq(users.id, documentComments.userId))
+      .where(eq(documentComments.fileId, fileId)).orderBy(asc(documentComments.createdAt));
+    const threads = rows.filter((r) => !r.parentId && (includeResolved || !r.resolved)).map((r) => ({
+      id: r.id, author: r.author ?? "Unknown user", at: r.createdAt, quote: r.quote, comment: r.comment, resolved: r.resolved,
+      replies: rows.filter((x) => x.parentId === r.id).map((x) => ({ author: x.author ?? "Unknown user", at: x.createdAt, comment: x.comment })),
+    }));
+    return { fileId, count: threads.length, comments: threads };
+  },
+});
+
+// ── getDocumentChanges ────────────────────────────────────────────────────────
+
+export const getDocumentChanges = tool({
+  description:
+    "See recent changes to a project document: who changed it, whether in the Docs editor or by the agent, " +
+    "when, how many lines changed, and a line diff of each change. Use it when asked what changed in a " +
+    "document, who edited it, or to review someone's edits.",
+  inputSchema: zodSchema(z.object({
+    fileId: z.string(),
+    limit: z.number().int().min(1).max(20).optional().describe("How many recent changes (default 5)"),
+  })),
+  execute: async ({ fileId, limit }) => {
+    const changes = await listDocumentEdits(fileId, limit ?? 5);
+    return { fileId, count: changes.length, changes };
   },
 });
 

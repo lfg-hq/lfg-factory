@@ -1,0 +1,16 @@
+{
+  "name": "lfg-doc-editor-vendor",
+  "private": true,
+  "description": "Builds public/js/vendor/doc-editor.js (Tiptap + markdown) for the in-place document editor. Run: bun install && bun run build",
+  "scripts": {
+    "build": "bun build entry.js --outfile ../../public/js/vendor/doc-editor.js --format iife --minify --target browser"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
+    "@tiptap/markdown": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/extension-list": "3.31.4"
+  }
+}

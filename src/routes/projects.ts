@@ -13,7 +13,8 @@ import {
   projectInvitations,
 } from "../db/schema/projects.ts";
 import { llmApiKeys, profiles, users } from "../db/schema/users.ts";
-import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
+import { projectFiles, projectFileVersions, documentEdits } from "../db/schema/documents.ts";
+import { recordDocumentEdit } from "../services/document-edits.ts";
 import { conversations, chatFiles, messages } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
@@ -998,95 +999,70 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
   return c.json({ tickets, hasMore, nextOffset: offset + ticketRows.length });
 });
 
-// ── GET /projects/:projectId/api/files/mentions/ ── @file autocomplete ──
-// Returns files matching a search query for the chat @file mention feature.
-projectsRouter.get("/projects/:projectId/api/files/mentions/", async (c) => {
+// ── GET /projects/:projectId/api/files/mentions ── @file autocomplete ──
+// Searches every active document in the project (not just the newest few) by
+// name. Design previews are left out: they're screenshots, not documents you
+// discuss in chat.
+// "pm_map" rows are JSON planning maps left by an earlier PM-mode experiment.
+// Nothing renders them any more, so they'd show as raw JSON; keep them out of
+// the Docs list and the @-picker (the rows themselves are untouched).
+const HIDDEN_DOC_TYPE = "pm_map";
+
+const MENTION_TYPE_LABELS: Record<string, string> = {
+  prd: "PRD",
+  implementation: "Implementation plan",
+  design: "Design",
+  design_language: "Design",
+  tech_analysis: "Technical analysis",
+  test: "Test plan",
+  other: "Document",
+};
+
+async function fileMentions(c: any) {
   const user = c.get("user");
   const { projectId } = c.req.param();
-  const q = (c.req.query("q") ?? "").toLowerCase();
+  const q = (c.req.query("q") ?? "").trim().toLowerCase().slice(0, 80);
 
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ files: [], count: 0 });
-  const project = access.project;
 
-  let fileRows = await db
-    .select()
+  const conditions = [
+    eq(projectFiles.projectId, access.project.id),
+    eq(projectFiles.isActive, true),
+    ne(projectFiles.fileType, "page_preview"),
+    ne(projectFiles.fileType, HIDDEN_DOC_TYPE),
+  ];
+  if (q) {
+    const pattern = "%" + q.replace(/[\\%_]/g, (ch: string) => "\\" + ch) + "%";
+    conditions.push(sql`lower(${projectFiles.name}) like ${pattern} escape '\\'`);
+  }
+
+  const fileRows = await db
+    .select({ id: projectFiles.id, name: projectFiles.name, fileType: projectFiles.fileType, updatedAt: projectFiles.updatedAt })
     .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
+    .where(and(...conditions))
     .orderBy(desc(projectFiles.updatedAt))
     .limit(20);
 
-  // Filter by query if provided
-  if (q) {
-    fileRows = fileRows.filter(
-      (f) => f.name.toLowerCase().includes(q) || f.fileType.toLowerCase().includes(q)
-    );
-  }
-
-  const TYPE_LABELS: Record<string, string> = {
-    prd: "Product Requirements",
-    implementation: "Implementation Plan",
-    design: "Design Document",
-    test: "Test Plan",
-    other: "Document",
-  };
-
-  const files = fileRows.map((f) => ({
-    id: f.id,
-    name: f.name,
-    type: f.fileType,
-    label: `${f.name} (${TYPE_LABELS[f.fileType] ?? f.fileType})`,
-    updated_at: f.updatedAt
-      ? new Date(f.updatedAt as unknown as number * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : "",
-  }));
+  const files = fileRows.map((f) => {
+    const updated = f.updatedAt instanceof Date ? f.updatedAt : f.updatedAt ? new Date(f.updatedAt as any) : null;
+    const kind = MENTION_TYPE_LABELS[f.fileType] ?? "Document";
+    return {
+      id: f.id,
+      name: f.name,
+      type: f.fileType,
+      kind,
+      label: `${f.name} (${kind})`,
+      updated_at: updated && !isNaN(updated.getTime()) ? updated.toISOString() : "",
+    };
+  });
 
   return c.json({ files, count: files.length });
-});
+}
 
+projectsRouter.get("/projects/:projectId/api/files/mentions/", fileMentions);
 // Without trailing slash variant — same handler (no redirect to avoid loops)
-projectsRouter.get("/projects/:projectId/api/files/mentions", async (c) => {
-  const user = c.get("user");
-  const { projectId } = c.req.param();
-  const q = (c.req.query("q") ?? "").toLowerCase();
-
-  const access = await getProjectAccess(projectId!, user.id);
-  if (!access) return c.json({ files: [], count: 0 });
-  const project = access.project;
-
-  let fileRows = await db
-    .select()
-    .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
-    .orderBy(desc(projectFiles.updatedAt))
-    .limit(20);
-
-  if (q) {
-    fileRows = fileRows.filter(
-      (f) => f.name.toLowerCase().includes(q) || f.fileType.toLowerCase().includes(q)
-    );
-  }
-
-  const TYPE_LABELS: Record<string, string> = {
-    prd: "Product Requirements",
-    implementation: "Implementation Plan",
-    design: "Design Document",
-    test: "Test Plan",
-    other: "Document",
-  };
-
-  const files = fileRows.map((f) => ({
-    id: f.id,
-    name: f.name,
-    type: f.fileType,
-    label: `${f.name} (${TYPE_LABELS[f.fileType] ?? f.fileType})`,
-    updated_at: f.updatedAt
-      ? new Date(f.updatedAt as unknown as number * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : "",
-  }));
-
-  return c.json({ files, count: files.length });
-});
+projectsRouter.get("/projects/:projectId/api/files/mentions", fileMentions);
 
 // ── Compat: GET /projects/:projectId/api/files/browser ──────────────
 // artifacts-loader.js (Django-era) fetches this URL for the Docs tab file list.
@@ -1106,7 +1082,7 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     db.select({ id: projectFiles.id, name: projectFiles.name, fileType: projectFiles.fileType,
       updatedAt: projectFiles.updatedAt, createdAt: projectFiles.createdAt })
       .from(projectFiles)
-      .where(eq(projectFiles.projectId, project.id))
+      .where(and(eq(projectFiles.projectId, project.id), ne(projectFiles.fileType, HIDDEN_DOC_TYPE)))
       .orderBy(desc(projectFiles.updatedAt)),
     epicLinksForDocs(project.id).catch(() => ({} as Awaited<ReturnType<typeof epicLinksForDocs>>)),
     db.select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status, createdAt: epics.createdAt })
@@ -1149,7 +1125,59 @@ projectsRouter.get("/projects/:projectId/api/files/:fileId/content", async (c) =
   if (!file) return c.json({ error: "File not found" }, 404);
 
   const content = await getContent(file.s3Key, file.content);
-  return c.json({ id: file.id, name: file.name, type: file.fileType, content });
+  return c.json({ id: file.id, name: file.name, type: file.fileType, content, updatedAt: file.updatedAt });
+});
+
+// ── PUT /projects/:projectId/api/files/:fileId/content — in-place editor autosave ──
+// The Docs viewer edits a document live and saves every pause in typing, so this
+// saves by id (names aren't unique across types) and snapshots a version only once
+// per editing session — not on every keystroke-debounce. `baseUpdatedAt` is the
+// updatedAt the editor loaded; if someone (usually the agent) wrote the file since,
+// the save is refused with 409 rather than silently overwriting their change.
+const INLINE_EDIT_VERSION_GAP_MS = 10 * 60 * 1000;
+projectsRouter.put("/projects/:projectId/api/files/:fileId/content", async (c) => {
+  const user = c.get("user");
+  const { projectId, fileId } = c.req.param();
+
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canEditFiles"); } catch { return c.json({ error: "Forbidden" }, 403); }
+  const project = access.project;
+
+  const body = await c.req.json().catch(() => ({})) as { content?: unknown; baseUpdatedAt?: unknown; source?: unknown };
+  if (typeof body.content !== "string") return c.json({ error: "content is required" }, 400);
+
+  const [file] = await db.select().from(projectFiles)
+    .where(and(eq(projectFiles.id, fileId!), eq(projectFiles.projectId, project.id)));
+  if (!file) return c.json({ error: "File not found" }, 404);
+
+  const currentContent = await getContent(file.s3Key, file.content);
+  const base = typeof body.baseUpdatedAt === "string" ? Date.parse(body.baseUpdatedAt) : NaN;
+  if (!Number.isNaN(base) && file.updatedAt && file.updatedAt.getTime() > base + 1) {
+    return c.json({ error: "conflict", content: currentContent, updatedAt: file.updatedAt }, 409);
+  }
+  if (currentContent === body.content) {
+    return c.json({ success: true, id: file.id, updatedAt: file.updatedAt });
+  }
+
+  // One editing session = this person in the Docs editor with no other edit (the
+  // agent's included) in between. A new session snapshots the text it starts from.
+  const source = body.source === "raw" ? "raw" : "editor";
+  const [latest] = await db.select({ userId: documentEdits.userId, source: documentEdits.source, updatedAt: documentEdits.updatedAt })
+    .from(documentEdits).where(eq(documentEdits.fileId, file.id))
+    .orderBy(desc(documentEdits.updatedAt)).limit(1);
+  const sameSession = latest && latest.userId === user.id && latest.source === source
+    && Date.now() - new Date(latest.updatedAt).getTime() < INLINE_EDIT_VERSION_GAP_MS;
+  const baseVersion = sameSession ? null : await saveVersion(file.id, currentContent, user.id);
+
+  const { s3Key, dbContent } = await saveContent(project.id, file.fileType, file.name, body.content);
+  const [updated] = await db.update(projectFiles)
+    .set({ content: dbContent, s3Key, updatedAt: new Date() })
+    .where(eq(projectFiles.id, file.id))
+    .returning();
+  await recordDocumentEdit({ fileId: file.id, userId: user.id, source, baseVersion, before: currentContent, after: body.content });
+
+  return c.json({ success: true, id: updated!.id, updatedAt: updated!.updatedAt });
 });
 
 // Trailing slash variant for chat.js compatibility
@@ -1180,6 +1208,7 @@ async function saveVersion(fileId: string, content: string, userId: string) {
     createdById: userId,
     changeDescription: "Manual save",
   });
+  return nextVersion;
 }
 
 // ── POST /projects/:projectId/api/files — update file content ─────────

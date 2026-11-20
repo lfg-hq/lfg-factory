@@ -67,6 +67,30 @@ export const projectFileVersions = pgTable(
   ]
 );
 
+// ── Document edit log ──────────────────────────────────────────────
+// One row per editing session on a document: who changed it, whether it was a
+// person in the Docs editor or the agent, and which saved version holds the text
+// from before the change (so the change can be shown as a diff).
+export const documentEdits = pgTable(
+  "document_edit",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    fileId: text("file_id")
+      .notNull()
+      .references(() => projectFiles.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    source: text("source").notNull(), // editor | agent | raw
+    baseVersion: integer("base_version"),
+    addedLines: integer("added_lines").notNull().default(0),
+    removedLines: integer("removed_lines").notNull().default(0),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+    updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+  },
+  (t) => [index("de_file_idx").on(t.fileId, t.updatedAt)]
+);
+
 export const toolCallHistory = pgTable(
   "tool_call_history",
   {

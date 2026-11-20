@@ -45,8 +45,9 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261118" />
+  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261118-composer-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261120-docedit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
@@ -126,7 +127,7 @@ export function ChatPage({
   </style>
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=5" />
 </head>
 <body data-user-id="${user.id}"
   data-user-name="${user.name}"
@@ -584,9 +585,10 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js?v=20261118-retry2"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261118-docs-repaint"></script>
-  <script src="/public/js/document-comments.js"></script>
-  <script src="/public/js/artifacts.js?v=20261118-panel-fit"></script>
+  <script src="/public/js/doc-editor.js?v=20261113-modes"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261120-docedit"></script>
+  <script src="/public/js/document-comments.js?v=20261120-docedit"></script>
+  <script src="/public/js/artifacts.js?v=20261120-docedit"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
@@ -603,7 +605,7 @@ export function ChatPage({
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261118-open-url2"></script>
+  <script src="/public/js/chat.js?v=20261120-docedit"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
