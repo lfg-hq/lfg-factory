@@ -3083,28 +3083,30 @@ document.addEventListener('DOMContentLoaded', function() {
                     `;
 
                     // An append re-renders the whole list; keep the reader where they were.
-                    const scroller = append ? (() => { for (let n = checklistTab; n; n = n.parentElement) { if (n.scrollHeight > n.clientHeight && /(auto|scroll)/.test(getComputedStyle(n).overflowY)) return n; } return null; })() : null;
-                    const keepTop = scroller ? scroller.scrollTop : 0;
+                    const keepTop = append ? (checklistTab.querySelector('.checklist-container')?.scrollTop || 0) : 0;
                     checklistTab.innerHTML = checklistHTML;
-                    if (scroller) requestAnimationFrame(() => { scroller.scrollTop = keepTop; });
+                    if (keepTop) requestAnimationFrame(() => { const list = checklistTab.querySelector('.checklist-container'); if (list) list.scrollTop = keepTop; });
                     window.TicketMap?.mount(projectId, checklistTab);
                     // Older tickets load on their own when you scroll to the end of the
-                    // list, 20 at a time. No banner, no button.
-                    if (this._checklistMoreObs) { this._checklistMoreObs.disconnect(); this._checklistMoreObs = null; }
+                    // list, 20 at a time. No banner, no button. The list scrolls inside
+                    // .checklist-container, so watch that, not the page.
                     if (data.hasMore) {
-                        const sentinel = document.createElement('div');
-                        sentinel.className = 'checklist-more';
-                        sentinel.setAttribute('aria-hidden', 'true');
-                        sentinel.style.cssText = 'height:40px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px';
-                        (checklistTab.querySelector('.checklist-wrapper') || checklistTab).append(sentinel);
-                        if ('IntersectionObserver' in window) {
-                            const obs = this._checklistMoreObs = new IntersectionObserver((entries) => {
-                                if (!entries.some(e => e.isIntersecting)) return;
-                                obs.disconnect(); this._checklistMoreObs = null;
-                                sentinel.textContent = 'Loading…';
+                        const list = checklistTab.querySelector('.checklist-container');
+                        if (list) {
+                            let asked = false;
+                            const more = () => {
+                                if (asked || !list.isConnected) return;
+                                asked = true;
+                                list.removeEventListener('scroll', onScroll);
+                                list.removeEventListener('wheel', onWheel);
                                 this.loadChecklist(projectId, true);
-                            }, { rootMargin: '200px' });
-                            obs.observe(sentinel);
+                            };
+                            const nearEnd = () => list.scrollTop + list.clientHeight >= list.scrollHeight - 200;
+                            const onScroll = () => { if (nearEnd()) more(); };
+                            // A short (filtered) list can't scroll; a downward wheel at the end still asks.
+                            const onWheel = (e) => { if (e.deltaY > 0 && nearEnd()) more(); };
+                            list.addEventListener('scroll', onScroll, { passive: true });
+                            list.addEventListener('wheel', onWheel, { passive: true });
                         }
                     }
 
