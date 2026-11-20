@@ -187,7 +187,9 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     turn.clientMessageId = msg.client_message_id;
     const output = turn.transport;
     send(output,{type:'chat_queue',items:turn.followups.snapshot()});
-    send(output,{type:'message_started',message:msg.display_message ?? normalizedMessage,files:resolvedFiles,render_on_start:!!msg.render_on_start,client_message_id:msg.client_message_id});
+    // Each file's own link (built from its id, never taken from the client) so the bubble can show an image inline.
+    const startedFiles=resolvedFiles.map((f:any)=>({id:f?.id,name:f?.name,type:f?.type,size:f?.size,...(typeof f?.id==='string'&&f.id?{url:`/api/files/${encodeURIComponent(f.id)}`}:{})}));
+    send(output,{type:'message_started',message:msg.display_message ?? normalizedMessage,files:startedFiles,render_on_start:!!msg.render_on_start,client_message_id:msg.client_message_id});
 
     // Watchdog: if the model stream HANGS (provider stops responding with no output),
     // handleStream never returns → the finally never runs → isStreaming stays true →
