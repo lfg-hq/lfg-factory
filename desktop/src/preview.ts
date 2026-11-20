@@ -191,6 +191,9 @@ export class LocalPreview {
     this.repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(payload.repoUrl).digest("hex").slice(0, 12));
   }
 
+  /** Its steps so far, to report again after a reconnect. */
+  currentSteps(): PreviewStep[] { return this.steps.map(s => ({ ...s })); }
+
   /** Where and with what environment to run a data operation on this preview: only while it runs. */
   dataTarget(): { dir: string; env: NodeJS.ProcessEnv } | null {
     return this.isRunning && this.appEnv && !this.stopped ? { dir: this.dir, env: this.appEnv } : null;

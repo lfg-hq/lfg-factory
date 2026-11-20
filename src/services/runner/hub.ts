@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, ne } from "drizzle-orm";
 import { db } from "../../config/db.ts";
 import { runnerDevices, runnerJobs } from "../../db/schema/runners.ts";
 import { projectTickets } from "../../db/schema/tickets.ts";
@@ -155,8 +155,10 @@ export function runnerClosed(conn: RunnerConn): void {
     await db.update(runnerJobs).set({ status: "queued", deviceId: null })
       .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.status, "offered")));
     // Already running: the laptop may just be switching networks. Give it a while.
+    // A preview isn't failed for this: its app keeps running on the computer, which reports
+    // it again when it reconnects (the hello below settles it if the computer restarted).
     const running = await db.select({ id: runnerJobs.id }).from(runnerJobs)
-      .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.status, "running")));
+      .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.status, "running"), ne(runnerJobs.type, "preview")));
     for (const { id } of running) {
       if (lostTimers.has(id)) continue;
       lostTimers.set(id, setTimeout(() => {
@@ -196,6 +198,15 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
     }).where(eq(runnerDevices.id, conn.deviceId));
     // Anything this device was running that it no longer knows about died with it.
     const active = new Set(msg.activeJobIds ?? []);
+    // A preview given up for dead while the computer was away (older servers did that), which
+    // the computer is in fact still running: take it back. The computer re-reports its state.
+    if (active.size) {
+      const revived = await db.update(runnerJobs).set({ status: "running", error: null, finishedAt: null })
+        .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.type, "preview"), eq(runnerJobs.status, "failed"),
+          inArray(runnerJobs.id, [...active].filter(id => typeof id === "string").slice(0, 50)), like(runnerJobs.error, "Lost contact%")))
+        .returning({ id: runnerJobs.id });
+      if (revived.length) console.log(`[runner] ${conn.deviceName}: took back ${revived.length} preview(s) it kept running`);
+    }
     const mine = await db.select({ id: runnerJobs.id }).from(runnerJobs)
       .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.status, "running")));
     for (const { id } of mine) {

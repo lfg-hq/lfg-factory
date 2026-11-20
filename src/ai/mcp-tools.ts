@@ -46,10 +46,10 @@ async function previewTools(grant: TurnGrant, publicProjectId: string): Promise<
   const { previewDiagnosticsTool } = await import("./tools/preview-diagnostics.ts");
   const { previewActionTool } = await import("./tools/preview-action-tools.ts");
   const ctx = { projectId, publicProjectId, userId: grant.userId, conversationId: grant.conversationId };
+  const { cloudOnlyTools } = await import("../services/preview-where.ts");
   return {
-    ...(await createPreviewInspectTool({ projectId })),
+    ...cloudOnlyTools({ ...(await createPreviewInspectTool({ projectId })), runInPreview: createPreviewRunTool(ctx) }, grant.userId, projectId),
     getPreviewDiagnostics: previewDiagnosticsTool({ projectId, publicProjectId, userId: grant.userId }),
-    runInPreview: createPreviewRunTool(ctx),
     handlePreview: previewActionTool(ctx),
   };
 }

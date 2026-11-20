@@ -770,8 +770,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const branchCtxPromise = internalProjectId && !req.mentionedTickets?.length
     ? buildPreviewBranchContext(internalProjectId)
     : Promise.resolve("");
+  // Reaches only the cloud sandbox: refuses when the person's preview is on their computer.
   const previewInspectPromise = productChat && internalProjectId
-    ? createPreviewInspectTool({ projectId: internalProjectId })
+    ? createPreviewInspectTool({ projectId: internalProjectId }).then(async t => (await import("../services/preview-where.ts")).cloudOnlyTools(t, userId, internalProjectId))
     : Promise.resolve({});
 
   // ── Branch awareness — pin the model to the branch the Preview is showing ──────
@@ -841,8 +842,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (projectId) Object.assign(tools, (await import('./tools/eval-tools.ts')).evalTools({projectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     // A working shell in the preview for verification: run checks and scripts, report the evidence.
-    if (projectId && productChat) tools.runInPreview = createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,
-      onProgress: (detail) => { if (abortController.signal.aborted) return; req.onActivity?.(); noteActivity(detail, "runInPreview"); }});
+    if (projectId && productChat) tools.runInPreview = (await import("../services/preview-where.ts")).cloudOnlyTools({ runInPreview: createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,
+      onProgress: (detail) => { if (abortController.signal.aborted) return; req.onActivity?.(); noteActivity(detail, "runInPreview"); }}) }, userId, internalProjectId).runInPreview;
     if (projectId) tools.handlePreview = previewActionTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,onActivity:req.onActivity,
       onProgress: (detail) => {
         if (abortController.signal.aborted) return;
@@ -1037,6 +1038,14 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   tools = turnTools.tools;
   const repositoryCache = new Map<string, Response>();
   systemPrompt += READING_INSTRUCTIONS + CONTEXT_INSTRUCTIONS + (productChat ? PLAN_INSTRUCTIONS : "");
+  // Which copy of the preview the person uses (their computer or the cloud), so the agent
+  // fixes and checks that one and says which. Fresh every turn: it changes between messages.
+  if (internalProjectId && userId) {
+    try {
+      const { previewSituation, previewSituationText } = await import("../services/preview-where.ts");
+      systemPrompt += previewSituationText(await previewSituation(userId, internalProjectId));
+    } catch (e) { console.warn("[stream-handler] preview situation unavailable:", (e as Error).message); }
+  }
   try {
   const summaryCache = new Map<string, Promise<string>>();
   const summaryChars = summaryLimit(profile.budget);

@@ -17,7 +17,7 @@ const input = z.discriminatedUnion('action',[
 /** Data requests use constrained operation tools; source repairs belong to ticket execution. */
 export function previewActionTool(context:Context, dependencies?:Dependencies) {
  return tool({
-  description: 'Perform requested preview operations without building tickets: expose_port opens an extra running port of the preview (a WebSocket/audio worker, webhook receiver or API) on its own public https/wss URL, kept across restarts — use it instead of a ticket when a service needs a public address; restart_app applies saved settings and restarts the prepared app; manage_data handles development accounts, passwords, data edits and processing-history cleanup in the selected running preview. It can inspect source/schema, pause and resume background workers, and change related records atomically in one database transaction with verification and rollback. It preserves unrelated accounts/settings. It has no source editing or build tools. PostgreSQL with installed pg and managed SQL Server are supported; password hashing supports Better Auth, bcrypt and ASP.NET Core Identity v3 after source inspection. Environment changes use the environment tools. Only application code, dependency, script or schema changes go through tickets. Never rebuild a ticket for an operational data request.',
+  description: 'Perform requested preview operations without building tickets: expose_port opens an extra running port of the preview (a WebSocket/audio worker, webhook receiver or API) on its own public https/wss URL, kept across restarts — use it instead of a ticket when a service needs a public address; restart_app starts or restarts the preview where the user runs it (on their computer or in the cloud) with the current project environment keys, so call it after saving keys; manage_data handles development accounts, passwords, data edits and processing-history cleanup in the selected running preview. It can inspect source/schema, pause and resume background workers, and change related records atomically in one database transaction with verification and rollback. It preserves unrelated accounts/settings. It has no source editing or build tools. PostgreSQL with installed pg and managed SQL Server are supported; password hashing supports Better Auth, bcrypt and ASP.NET Core Identity v3 after source inspection. Environment changes use the environment tools. Only application code, dependency, script or schema changes go through tickets. Never rebuild a ticket for an operational data request.',
   inputSchema:zodSchema(input),
   execute:async(args:z.infer<typeof input>)=>{
    // Validate again for direct callers and old conversations replaying legacy inputs.
@@ -37,6 +37,17 @@ export function previewActionTool(context:Context, dependencies?:Dependencies) {
     if(!d.operate)return {status:'error',reply:'Preview data operations are unavailable; no ticket was started.'};
     context.onProgress?.('Working on your request');
     return d.operate({...context,instruction:args.instruction});
+   }
+   if(!dependencies){
+    // The person's preview may run on their computer: start or restart that one.
+    const {previewSituation}=await import('../../services/preview-where.ts');
+    const situation=await previewSituation(context.userId,context.projectId);
+    if(situation.where==='computer'){
+     context.onProgress?.(situation.running?'Restarting the preview on your computer':'Starting the preview on your computer');
+     const {restartLocalPreview}=await import('../../services/runner/preview-job.ts');
+     const local=await restartLocalPreview(context.userId,context.projectId);
+     return 'error' in local ? {status:'error',where:'computer',reply:local.error} : {status:'ok',where:'computer',previewUrl:local.previewUrl,reply:`The preview on the user's computer is running at ${local.previewUrl}, with the project's current environment keys. This did not implement or verify a feature.`};
+    }
    }
    context.onProgress?.('Restarting the prepared preview app');
    const result=await d.restart(context.projectId,{userId:context.userId});

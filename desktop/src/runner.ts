@@ -216,6 +216,12 @@ export class Runner {
       case "welcome":
         this.backoff = 1000;
         this.setState("connected", msg.deviceName);
+        // Updates sent while disconnected were lost, and the server may have given these up
+        // for dead: report each preview still running here, so LFG shows it again.
+        for (const e of this.previews.values()) {
+          if (!e.urls?.length || e.stopping) continue;
+          this.send({ type: "job.preview", jobId: e.jobId, update: { status: "running", urls: e.urls, error: "", steps: e.preview.currentSteps(), lines: ["Reconnected to LFG; the app kept running on this computer."] } });
+        }
         return;
       case "ping":
         this.serverPings = true;

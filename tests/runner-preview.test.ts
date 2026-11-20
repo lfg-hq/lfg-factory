@@ -281,3 +281,36 @@ test("no data operation when the preview on the computer isn't running", async (
   expect(await preview.runningLocalPreview("alice", projectId)).toBeNull();
   await expect(preview.runLocalPreviewData("alice", projectId, { kind: "databaseInfo", connectionKeys: [] }, "Check")).rejects.toThrow("isn't running");
 });
+
+test("a preview survives its computer dropping off: it shows as away, then running again when LFG Desktop reports back", async () => {
+  const { projectId, mac } = await runningOnMac(4);
+  const job = (await db.select().from(runnerJobs).where(eq(runnerJobs.projectId, projectId))).find(j => j.type === "preview")!;
+  hub.runnerClosed(mac);
+  await Bun.sleep(20);
+  let state = await preview.localPreviewState("alice", projectId);
+  expect(state.waiting).toBe(true);
+  expect(state.waitingMessage).toContain("Lost contact");
+  expect(await preview.runningLocalPreview("alice", projectId)).toBeNull(); // the agent won't act on it meanwhile
+  expect((await jobRow(job.id)).status).toBe("running"); // not failed
+
+  const back = fakeConn(mac.deviceId, "alice", "Alice's Mac");
+  await hub.runnerOpened(back);
+  await say(back, { type: "hello", activeJobIds: [job.id], protocol: 4 });
+  await say(back, { type: "job.preview", jobId: job.id, update: { status: "running", error: "", urls: [{ name: "web", url: "http://localhost:3000", port: 3000, primary: true }] } });
+  state = await preview.localPreviewState("alice", projectId);
+  expect(state.previewStatus).toBe("running");
+  expect(state.waiting).toBe(false);
+  expect(state.previewUrl).toBe("http://localhost:3000");
+});
+
+test("a preview an older server gave up on ('Lost contact') is taken back when the computer says it still runs it", async () => {
+  const { projectId, mac } = await runningOnMac(4);
+  const job = (await db.select().from(runnerJobs).where(eq(runnerJobs.projectId, projectId))).find(j => j.type === "preview")!;
+  await db.update(runnerJobs).set({ status: "failed", error: "Lost contact with Alice's Mac.", finishedAt: new Date() }).where(eq(runnerJobs.id, job.id));
+  await say(mac, { type: "hello", activeJobIds: [job.id], protocol: 4 });
+  expect((await jobRow(job.id)).status).toBe("running");
+  await say(mac, { type: "job.preview", jobId: job.id, update: { status: "running", error: "", urls: [{ name: "web", url: "http://localhost:3000", port: 3000, primary: true }] } });
+  const state = await preview.localPreviewState("alice", projectId);
+  expect(state.previewStatus).toBe("running");
+  expect(state.error).toBeNull();
+});

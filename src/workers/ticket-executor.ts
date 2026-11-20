@@ -1075,10 +1075,10 @@ async function buildTargetFor(ticketId: string, actorId: string | undefined) {
 }
 
 /** Hand a build or a ticket-chat follow-up to the person's own computer. */
-async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string; agent?: import("../services/runner/protocol.ts").AgentKind }): Promise<void> {
+async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string; agent?: import("../services/runner/protocol.ts").AgentKind }): Promise<{ id: string } | null> {
   const { startTicketOnRunner, RunnerJobError } = await import("../services/runner/ticket-job.ts");
   try {
-    await startTicketOnRunner({ projectId, ticketId, actorId, ...opts });
+    return await startTicketOnRunner({ projectId, ticketId, actorId, ...opts });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const [owner] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
@@ -1091,7 +1091,24 @@ async function sendToTheirComputer(ticketId: string, projectId: string, actorId:
       ? "Your computer is still working on this ticket. Send the message again when it finishes."
       : `Couldn't run this on your computer: ${message}`;
     await addLog(ticketId, text, "cli_error", owner?.ownerId);
+    return null;
   }
+}
+
+/** Wait for a job on someone's computer to finish (a ticket follow-up), with its outcome. */
+async function runnerJobOutcome(jobId: string, timeoutMs = 3 * 60 * 60_000): Promise<{ ok: boolean; summary?: string; error?: string }> {
+  const { watchJob } = await import("../services/runner/hub.ts");
+  const { runnerJobs } = await import("../db/schema/runners.ts");
+  const [already] = await db.select().from(runnerJobs).where(eq(runnerJobs.id, jobId)).limit(1);
+  if (already && ["succeeded", "failed", "cancelled", "rejected"].includes(already.status)) return { ok: already.status === "succeeded", summary: already.summary ?? undefined, error: already.error ?? already.status };
+  return new Promise(resolve => {
+    const stop = watchJob(jobId, update => {
+      if (update.type === "rejected") { done(); resolve({ ok: false, error: `Your computer didn't run it: ${update.reason ?? "declined"}` }); }
+      if (update.type === "finished") { done(); resolve({ ok: update.ok, summary: update.summary, error: update.error }); }
+    });
+    const timer = setTimeout(() => { done(); resolve({ ok: false, error: "No result from your computer after 3 hours." }); }, timeoutMs);
+    function done() { clearTimeout(timer); stop(); }
+  });
 }
 
 export async function startTicketWorker() {
@@ -1309,7 +1326,15 @@ export async function startTicketWorker() {
     if (actorId && chatTarget?.where === "computer") {
       const projectId = await resolveProjectIdForTicket(ticketId);
       if (projectId) {
-        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message, agent: chatTarget.agent }));
+        // Handing it over is not the outcome: wait for the computer to finish, then report what
+        // it did. (Returning straight away marked every follow-up "failed" within a second.)
+        await withTicketOperation(operationId, async () => {
+          const job = await sendToTheirComputer(ticketId, projectId, actorId, { followUp: message, agent: chatTarget.agent });
+          if (!job) { await updateTicketOperation("failed", "Couldn't send this to your computer; the ticket's log says why."); return; }
+          const outcome = await runnerJobOutcome(job.id);
+          await updateTicketOperation(outcome.ok ? "completed" : "failed",
+            outcome.ok ? (outcome.summary?.trim() || "Done on your computer.").slice(0, 3000) : `Didn't finish on your computer: ${outcome.error ?? "unknown error"}`);
+        });
         return;
       }
     }

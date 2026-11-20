@@ -21,7 +21,7 @@ import { epics } from "../../db/schema/epics.ts";
 import { decryptSecret } from "../../utils/crypto.ts";
 import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
-import { cancelJob, connectedRunnerFor, deviceProtocol, enqueueJob, watchJob } from "./hub.ts";
+import { cancelJob, connectedRunnerFor, deviceProtocol, enqueueJob, isDeviceConnected, watchJob } from "./hub.ts";
 import { localAiSettings } from "./opt-in.ts";
 import { projectRunOn, ticketBuildWith } from "./build-target.ts";
 import { RUNNER_PROTOCOL_VERSION, type PreviewPayload, type PreviewPhase, type PreviewPlan, type PreviewStep, type PreviewUpdate, type PreviewUrl } from "./protocol.ts";
@@ -329,7 +329,9 @@ export async function localPreviewState(userId: string, projectId: string) {
   if (!job) return { ...base, previewStatus: "idle", previewUrl: null, error: null, branch: null, log: "", steps: [], services: [], deviceName: null, waiting: false, label: null };
   const p = payloadOf(job);
   const s = readSaved(job);
-  const waiting = job.status === "queued";
+  // Running on a computer that dropped off (asleep, changing networks): it reports in again when it's back.
+  const away = job.status === "running" && !!job.deviceId && !isDeviceConnected(job.deviceId);
+  const waiting = job.status === "queued" || away;
   const status: PreviewPhase =
     job.status === "queued" || job.status === "offered" ? "detecting"
     : job.status === "running" ? s.status
@@ -348,7 +350,42 @@ export async function localPreviewState(userId: string, projectId: string) {
     services: status === "running" ? s.urls.map(u => ({ name: u.name, port: u.port, primary: !!u.primary, enabled: true, manual: false, dir: "", url: u.url })) : [],
     deviceName: s.deviceName,
     waiting,
-    waitingMessage: waiting ? waitingMessage(userId) : null,
+    waitingMessage: away ? `Lost contact with ${s.deviceName ?? "your computer"}. The app may still be running there; this updates when LFG Desktop reconnects.` : waiting ? waitingMessage(userId) : null,
+  };
+}
+
+// ── For the agent: keys, restart, diagnostics of the preview on the computer ──
+
+/** The project's environment keys and values now, as a preview would get them. */
+export const currentProjectEnv = (projectId: string) => projectEnv(projectId);
+
+/** The environment a preview on the computer started with (its job's payload). */
+export async function localPreviewStartedEnv(jobId: string): Promise<Record<string, string>> {
+  const [job] = await db.select().from(runnerJobs).where(eq(runnerJobs.id, jobId)).limit(1);
+  return (job && payloadOf(job)?.env) || {};
+}
+
+/**
+ * Start, or restart, this person's preview on their computer with the project's current
+ * keys and the branch it ran last, and wait until it answers (or fails). Reuses what is
+ * installed: only a new commit or new dependencies reinstall/rebuild.
+ */
+export async function restartLocalPreview(userId: string, projectId: string, waitMs = 6 * 60_000): Promise<{ previewUrl: string } | { error: string }> {
+  if (!connectedRunnerFor(userId, PREVIEW_PROTOCOL)) return { error: waitingMessage(userId) };
+  const job = await startLocalPreview({ projectId, userId, refresh: false });
+  return waitForLocalPreview(job.id, waitMs);
+}
+
+/** The preview on the computer, for getPreviewDiagnostics: status, address, steps and recent log. */
+export async function localPreviewDiagnostics(userId: string, projectId: string, lines = 150) {
+  const s = await localPreviewState(userId, projectId);
+  return {
+    where: "computer" as const,
+    previewUrl: s.previewUrl, branch: s.branch, status: s.previewStatus, error: s.error ?? "",
+    deviceName: s.deviceName, waitingForComputer: s.waiting,
+    steps: s.steps.map(st => ({ step: st.label, status: st.status })),
+    services: s.services,
+    logs: s.log.split("\n").slice(-lines).join("\n"),
   };
 }
 
@@ -372,7 +409,7 @@ export const PREVIEW_DATA_PROTOCOL = 4;
 /** This person's preview of a project that is running on their computer right now, or null. */
 export async function runningLocalPreview(userId: string, projectId: string) {
   const job = await latestJob(userId, projectId);
-  if (!job || job.status !== "running") return null;
+  if (!job || job.status !== "running" || (job.deviceId && !isDeviceConnected(job.deviceId))) return null;
   const p = payloadOf(job);
   const s = readSaved(job);
   const url = primaryUrl(s);
