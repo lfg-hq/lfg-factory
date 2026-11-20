@@ -178,6 +178,8 @@ export class LocalPreview {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private exitHandlers: Array<(error: string) => void> = [];
   private isRunning = false;
+  /** The app's environment once it runs (database settings, Node.js on PATH): data operations use it. */
+  private appEnv: NodeJS.ProcessEnv | null = null;
   readonly dir: string;
   private readonly metaFile: string;
   private readonly repoDir: string;
@@ -187,6 +189,11 @@ export class LocalPreview {
     this.dir = join(ctx.workRoot, "previews", name);
     this.metaFile = join(ctx.workRoot, "previews", `.${name}.json`);
     this.repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(payload.repoUrl).digest("hex").slice(0, 12));
+  }
+
+  /** Where and with what environment to run a data operation on this preview: only while it runs. */
+  dataTarget(): { dir: string; env: NodeJS.ProcessEnv } | null {
+    return this.isRunning && this.appEnv && !this.stopped ? { dir: this.dir, env: this.appEnv } : null;
   }
 
   /** Called with a plain reason if the app stops by itself after it was running. */
@@ -407,6 +414,7 @@ export class LocalPreview {
       urls.push({ name: a.name, url, port: Number(new URL(url).port), primary: a.primary });
     }
     this.isRunning = true;
+    this.appEnv = appEnv;
     this.log(`Running on this computer: ${urls.map(u => u.url).join(", ")}`);
     this.report({ status: "running", urls, error: "" });
     return urls;

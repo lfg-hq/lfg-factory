@@ -23,6 +23,7 @@ import { RUNNER_PROTOCOL_VERSION, isAgentEffort, isAgentModel } from "./protocol
 import { LocalPreview, PreviewStopped, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 import { mustRun, run } from "./proc.ts";
+import { PREVIEW_DATA_PROGRAM } from "./preview-data-program.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
 
@@ -43,6 +44,7 @@ export type BuildJobOffer = Extract<RunnerJobOffer, { type: "claude_task" }>;
 
 /** Run the project's app on this computer for the Preview tab. */
 export type PreviewJobOffer = Extract<RunnerJobOffer, { type: "preview" }>;
+export type PreviewDataJobOffer = Extract<RunnerJobOffer, { type: "preview_data" }>;
 
 export type ApprovalResult = { approved: true } | { approved: false; reason?: string };
 
@@ -56,6 +58,8 @@ export interface RunnerOptions {
   approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Ask the person whether to run this app's commands for a preview. Absent: previews are declined. */
   approvePreview?(job: PreviewJobOffer, commands: string[]): Promise<ApprovalResult>;
+  /** A chat wants to change data (accounts, test data) in a preview running here. */
+  approvePreviewData?(job: PreviewDataJobOffer): Promise<ApprovalResult>;
   /** Docker Desktop is installed but stopped and a preview needs a database: ask to start it. */
   askStartDocker?(info: { projectName: string; engine: string }): Promise<boolean>;
   /** Ask before downloading a Node.js a preview needs. */
@@ -219,6 +223,8 @@ export class Runner {
         if (msg.job.type === "chat_turn") { void this.runChatTurn(msg.job); return; }
         // Previews run alongside builds, in their own folder.
         if (msg.job.type === "preview") { void this.runPreview(msg.job); return; }
+        // Data operations on a running preview: short, alongside everything else.
+        if (msg.job.type === "preview_data") { void this.runPreviewData(msg.job); return; }
         if (msg.job.type !== "claude_task") return;
         this.queue.push(msg.job);
         void this.drain();
@@ -317,6 +323,32 @@ export class Runner {
       if (!active.cancelled) fail(error instanceof Error ? error.message : String(error));
     } finally {
       this.active.delete(job.id);
+    }
+  }
+
+  /**
+   * One step of a preview data operation (inspect code, query or change the database, hash a
+   * test password, verify a login) on a preview running here. The server sends only the input;
+   * this computer runs its own copy of LFG's fixed data program in the preview's folder, with
+   * the preview's own database settings.
+   */
+  private async runPreviewData(job: PreviewDataJobOffer) {
+    const p = job.payload;
+    const reject = (reason: string) => this.send({ type: "job.rejected", jobId: job.id, reason });
+    if (!p || typeof p.projectId !== "string" || !p.input || typeof p.input !== "object" || Array.isArray(p.input)) return reject("The data request is malformed.");
+    const target = this.previews.get(previewFolderName(p.projectId))?.preview.dataTarget();
+    if (!target) return reject("That preview isn't running on this computer.");
+    if (!this.opts.approvePreviewData) return reject("This computer doesn't change preview data.");
+    const decision = await this.opts.approvePreviewData(job).catch(() => ({ approved: false as const, reason: "Approval failed" }));
+    if (!decision.approved) return reject(decision.reason ?? "Declined on this computer");
+    this.send({ type: "job.accepted", jobId: job.id });
+    try {
+      const data = Buffer.from(JSON.stringify(p.input)).toString("base64");
+      const r = await run("node", ["-e", PREVIEW_DATA_PROGRAM, data], { cwd: target.dir, env: target.env, timeoutMs: 60_000 });
+      const output = (r.stdout + r.stderr).slice(-12_000);
+      this.send({ type: "job.finished", jobId: job.id, ok: true, summary: JSON.stringify({ exitCode: r.code, output }) });
+    } catch (error) {
+      this.send({ type: "job.finished", jobId: job.id, ok: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 2000) });
     }
   }
 

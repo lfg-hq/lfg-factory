@@ -20,7 +20,7 @@ import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { emit } from "../../events/bus.ts";
 import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
-import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type PreviewPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
+import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type PreviewPayload, type PreviewDataPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
   deviceId: string;
@@ -97,8 +97,14 @@ export const userHasConnectedRunner = (userId: string) => [...conns.values()].so
 const connProtocol = new WeakMap<RunnerConn, number>();
 const protocolOf = (conn: RunnerConn) => connProtocol.get(conn) ?? 2;
 /** Jobs only some runners understand, and the protocol they need. */
-const NEEDS_PROTOCOL: Record<string, number> = { preview: 3 };
+const NEEDS_PROTOCOL: Record<string, number> = { preview: 3, preview_data: 4 };
 const canRun = (conn: RunnerConn, type: string) => protocolOf(conn) >= (NEEDS_PROTOCOL[type] ?? 0);
+
+/** The protocol a connected computer speaks, or null when it isn't connected. */
+export function deviceProtocol(deviceId: string): number | null {
+  const conn = conns.get(deviceId);
+  return conn ? protocolOf(conn) : null;
+}
 
 /** This person's most recently connected computer that speaks at least `minProtocol`. */
 export function connectedRunnerFor(userId: string, minProtocol = 0): RunnerConn | null {
@@ -271,7 +277,8 @@ async function jobForDevice(jobId: string, deviceId: string) {
 export async function enqueueJob(input:
   | { userId: string; projectId: string; ticketId: string | null; type?: "claude_task"; payload: ClaudeTaskPayload }
   | { userId: string; projectId: string; ticketId?: null; conversationId: string; type: "chat_turn"; payload: ChatTurnPayload }
-  | { userId: string; projectId: string; ticketId?: null; type: "preview"; payload: PreviewPayload }) {
+  | { userId: string; projectId: string; ticketId?: null; type: "preview"; payload: PreviewPayload }
+  | { userId: string; projectId: string; ticketId?: null; type: "preview_data"; payload: PreviewDataPayload; deviceId: string }) {
   const [job] = await db.insert(runnerJobs).values({
     userId: input.userId,
     projectId: input.projectId,
@@ -281,6 +288,8 @@ export async function enqueueJob(input:
     payload: JSON.stringify(input.payload),
     branch: "branch" in input.payload ? input.payload.branch : null,
     agent: "agent" in input.payload ? input.payload.agent ?? "claude" : null,
+    // Pinned to one computer (a data operation goes to the one running the preview).
+    ...("deviceId" in input ? { deviceId: input.deviceId } : {}),
   }).returning();
   await dispatchQueued(input.userId);
   const [fresh] = await db.select().from(runnerJobs).where(eq(runnerJobs.id, job!.id)).limit(1);
@@ -295,13 +304,15 @@ export async function dispatchQueued(userId: string): Promise<void> {
     .orderBy(asc(runnerJobs.createdAt));
   for (const job of queued) {
     // A job some computers can't run (a preview on an older LFG Desktop) waits for one that can.
-    const conn = connectedRunnerFor(userId, NEEDS_PROTOCOL[job.type] ?? 0);
+    const pinned = job.deviceId ? conns.get(job.deviceId) : undefined;
+    if (job.deviceId && pinned?.userId !== userId) continue;
+    const conn = pinned ?? connectedRunnerFor(userId, NEEDS_PROTOCOL[job.type] ?? 0);
     if (!conn || !canRun(conn, job.type)) continue;
     const claimed = await db.update(runnerJobs).set({ status: "offered", deviceId: conn.deviceId })
       .where(and(eq(runnerJobs.id, job.id), eq(runnerJobs.status, "queued")))
       .returning({ id: runnerJobs.id });
     if (!claimed.length) continue;
-    conn.send({ type: "job.offer", job: { id: job.id, type: job.type === "chat_turn" || job.type === "preview" ? job.type : "claude_task", payload: JSON.parse(job.payload) } as never });
+    conn.send({ type: "job.offer", job: { id: job.id, type: job.type === "chat_turn" || job.type === "preview" || job.type === "preview_data" ? job.type : "claude_task", payload: JSON.parse(job.payload) } as never });
     notify(job.id, { type: "offered", deviceName: conn.deviceName });
     await logToTicket(job, `Sent to ${conn.deviceName}. Waiting for it to start.`, "agent_progress");
   }
@@ -345,6 +356,7 @@ async function finishJob(jobId: string, deviceId: string,
   for (const key of toolRows.keys()) if (key.startsWith(`${jobId}:`)) toolRows.delete(key);
   notify(jobId, { type: "finished", ok: result.ok, summary: result.summary, error: result.error, sessionId: result.sessionId ?? job.agentSession ?? undefined });
   if (job.type === "preview") { await (await previews()).previewJobChanged(job, { type: "finished", ok: result.ok, error: result.error }); return; }
+  if (job.type === "preview_data") return; // its caller is watching; no ticket to update
 
   if (!result.ok) {
     await ticketUpdate(job, { status: "failed", queueStatus: "none" }, `Build on your computer failed: ${result.error ?? "unknown error"}`, "cli_error");

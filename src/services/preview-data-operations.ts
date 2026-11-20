@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {MSSQL_DATA_ADAPTER, IDENTITY_PASSWORD_ADAPTER} from './preview-mssql.ts';
+import {previewDataProgram} from './preview-data-program.ts';
 import {tool, zodSchema} from 'ai';
 import {z} from 'zod';
 import {shellQuote} from './preview-plan.ts';
@@ -29,65 +29,12 @@ export function validateDataSql(sql:string) {
 /** Fixed Node program: model input is data, never executable JavaScript or a file edit. */
 export function previewDataCommand(input:Record<string,unknown>):string {
  const data=Buffer.from(JSON.stringify(input)).toString('base64');
- const program=`
-const {createRequire}=require('node:module');
-const appRequire=createRequire(process.cwd()+'/package.json');
-const input=JSON.parse(Buffer.from(process.argv[1],'base64').toString());
-const clean=(v)=>Array.isArray(v)?v.map(clean):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,/password|token|secret|cookie/i.test(k)?'[redacted]':clean(x)])):v;
-${MSSQL_DATA_ADAPTER}
-(async()=>{
- if(input.kind==='listFiles'||input.kind==='readFile'){
-  const fs=require('node:fs'),path=require('node:path');const root=fs.realpathSync(process.cwd());
-  const target=fs.realpathSync(path.resolve(root,input.path));const relative=path.relative(root,target);
-  const blocked=(p)=>p.split(path.sep).some(part=>part==='..'||['.git','node_modules'].includes(part)||part.startsWith('.env'));
-  if(path.isAbsolute(relative)||blocked(relative)||blocked(input.path))throw Error('Use a source path within the selected checkout; environment files are available only through databaseInfo');
-  if(input.kind==='listFiles'){console.log(JSON.stringify({path:relative||'.',entries:fs.readdirSync(target,{withFileTypes:true}).filter(e=>!blocked(e.name)).slice(0,200).map(e=>({name:e.name,directory:e.isDirectory()}))}));return;}
-  const stat=fs.statSync(target);if(!stat.isFile()||stat.size>1000000)throw Error('Choose a source file under 1 MB');
-  const content=fs.readFileSync(target,'utf8');console.log(JSON.stringify({path:relative,content:content.slice(input.offset,input.offset+20000),nextOffset:content.length>input.offset+20000?input.offset+20000:null}));return;
- }
- if(input.kind==='databaseInfo'){
-  console.log(JSON.stringify({connections:input.connectionKeys.map(key=>{const value=process.env[key];if(!value)return {key,configured:false};try{const c=connection(value);return {key,configured:true,engine:c.engine,host:c.host,port:c.port,database:c.database,local:['localhost','127.0.0.1','[::1]'].includes(c.host)};}catch{return {key,configured:true,error:'Invalid connection URL'};}})}));return;
- }
- if(input.kind==='password'){
-  const password='Preview!'+require('node:crypto').randomBytes(18).toString('base64url');
-  let hash;
-  ${IDENTITY_PASSWORD_ADAPTER}
-  if(input.scheme==='better-auth'){const crypto=await import(appRequire.resolve('better-auth/crypto'));hash=await crypto.hashPassword(password);}
-  else {const bcrypt=appRequire(input.scheme);hash=await bcrypt.hash(password,12);}
-  console.log(JSON.stringify({password,hash}));return;
- }
- if(input.kind==='login'){
-  const url=new URL(input.path,input.origin);if(url.origin!==input.origin)throw Error('Login must target the selected preview');
-  const response=await fetch(url,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json',Origin:input.origin},body:JSON.stringify(input.body),signal:AbortSignal.timeout(15000)});
-  const cookies=response.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
-  let checked=null;
-  if(input.verifyPath&&cookies){const target=new URL(input.verifyPath,input.origin);if(target.origin!==input.origin)throw Error('Verification must target the selected preview');
-   const result=await fetch(target,{redirect:'manual',headers:{Cookie:cookies},signal:AbortSignal.timeout(15000)});
-   checked={status:result.status,body:clean(await result.json().catch(()=>null))};}
-  console.log(JSON.stringify({loginStatus:response.status,sessionIssued:!!cookies,verification:checked}));return;
- }
- const value=process.env[input.connectionKey];if(!value)throw Error('Selected database connection is missing');
- const selected=connection(value);if(!['localhost','127.0.0.1','[::1]'].includes(selected.host))throw Error('Only the selected local development database is supported');
- if(selected.engine==='mssql'){console.log(JSON.stringify(mssqlData(selected,input)));return;}
- const url=new URL(value);
- const {Client}=appRequire('pg');const client=new Client({connectionString:value,connectionTimeoutMillis:5000});
- try{await client.connect();await client.query('BEGIN');await client.query("SET LOCAL statement_timeout = '10s'");
-  const deadline=Date.now()+20000;
-  const results=[];
-  for(const [index,statement] of (input.kind==='transaction'?input.statements:[input]).entries()){
-   if(Date.now()>deadline)throw Error('Data transaction deadline exceeded; transaction rolled back');
-   const result=await client.query(statement.sql,statement.params);
-   if(result.command!=='SELECT'&&result.rowCount>statement.maxAffectedRows)throw Error('Row limit exceeded; transaction rolled back');
-   if(statement.expectedRows!==undefined&&result.rowCount!==statement.expectedRows)throw Error('Statement '+(index+1)+' did not match expectedRows; transaction rolled back');
-   results.push({statement:index+1,affectedRows:result.rowCount,rows:clean(result.rows.slice(0,30))});
-  }
-  await client.query('COMMIT');console.log(JSON.stringify(input.kind==='transaction'?{database:url.pathname,committed:true,results}:{database:url.pathname,...results[0]}));
- }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{await client.end();}
-})().catch(e=>{console.error(JSON.stringify({error:e.code||e.message}));process.exitCode=1;});`;
- return `node -e ${shellQuote(program)} ${shellQuote(data)}`;
+ return `node -e ${shellQuote(previewDataProgram())} ${shellQuote(data)}`;
 }
 
-export function previewDataTools(opts:{run:(command:string,activity?:string)=>Promise<{exitCode:number;output:string}>;connectionKeys:string[];previewUrl:string;saveAccount?:(account:{identity:string;connectionKey:string;username:string;password:string})=>Promise<void>;recallAccounts?:(identity:string)=>Promise<unknown>;workers?:(action:'status'|'pause'|'resume')=>Promise<unknown>}) {
+export function previewDataTools(opts:{run:(command:string,activity?:string)=>Promise<{exitCode:number;output:string}>;
+ /** Runs the operation's input with the data program elsewhere (the preview on the person's computer) instead of `run`. */
+ runInput?:(input:Record<string,unknown>,activity:string)=>Promise<{exitCode:number;output:string}>;connectionKeys:string[];previewUrl:string;saveAccount?:(account:{identity:string;connectionKey:string;username:string;password:string})=>Promise<void>;recallAccounts?:(identity:string)=>Promise<unknown>;workers?:(action:'status'|'pause'|'resume')=>Promise<unknown>}) {
  const generated=new Set<string>();
  const verified=new Set<string>();
  const identities=new Map<string,string>();
@@ -95,7 +42,7 @@ export function previewDataTools(opts:{run:(command:string,activity?:string)=>Pr
   const labels:Record<string,string>={listFiles:'Exploring app files',readFile:'Reading app code',databaseInfo:'Checking the database connection',password:'Preparing login credentials',login:'Verifying login'};
   const statements=input.kind==='transaction'?input.statements as {sql:string}[]:[{sql:String(input.sql||'')}];
   const activity=labels[String(input.kind)]||(statements.every(s=>/^\s*select\b/i.test(s.sql))?'Checking app data':'Updating app data');
-  const result=await opts.run(previewDataCommand(input),activity);
+  const result=opts.runInput?await opts.runInput(input,activity):await opts.run(previewDataCommand(input),activity);
   if(result.exitCode===0)try {
    const value=JSON.parse(result.output);
    if(input.kind==='password' && value.password)generated.add(value.password);
@@ -136,7 +83,7 @@ export function previewDataTools(opts:{run:(command:string,activity?:string)=>Pr
     return await execute({kind:'transaction',connectionKey:args.connectionKey,statements});
    }catch(e){return {error:(e as Error).message};}
   }}),
-  generateTestPassword:tool({description:'Generate a development-only password and hash using the app’s installed authentication library. Read the app code first to select the correct scheme; never substitute a different hashing algorithm. Use the hash only in a parameterized account update, and return only the new plaintext test password to the user.',inputSchema:zodSchema(z.object({scheme:z.enum(['better-auth','bcrypt','bcryptjs','aspnet-identity-v3']),iterations:z.number().int().min(10000).max(1000000).optional()})),execute:async({scheme,iterations}:{scheme:string;iterations?:number})=>execute({kind:'password',scheme,iterations})}),
+  generateTestPassword:tool({description:'Generate a development-only password and hash using the app’s installed authentication library. Read the app code first to select the correct scheme; never substitute a different hashing algorithm. Use the hash only in a parameterized account update, and return only the new plaintext test password to the user.',inputSchema:zodSchema(z.object({scheme:z.enum(['better-auth','bcrypt','bcryptjs','aspnet-identity-v3']),iterations:z.number().int().min(10000).max(1000000).optional(),reusePassword:z.string().min(8).max(200).optional().describe('Only when restoring a saved test login in this database: its saved password, so the same login works here. Otherwise omit for a fresh one.')})),execute:async({scheme,iterations,reusePassword}:{scheme:string;iterations?:number;reusePassword?:string})=>execute({kind:'password',scheme,iterations,...(reusePassword?{password:reusePassword}:{})})}),
   verifyLogin:tool({description:'Verify the requested test login using the app’s actual login API and optionally its session/role endpoint. Uses the selected preview origin. Does not install browser tools. Returns status and redacted session data; never credentials or cookies.',inputSchema:zodSchema(z.object({path:z.string().regex(/^\/(?!\/)/),body:z.record(z.string(),z.unknown()),verifyPath:z.string().regex(/^\/(?!\/)/).optional()})),execute:async(args:{path:string;body:Record<string,unknown>;verifyPath?:string})=>execute({...args,kind:'login',origin:new URL(opts.previewUrl).origin})}),
  };
 }

@@ -14,7 +14,7 @@ import { compileRuntimePlan, previewAvailabilityCommand } from "./runtime-plan.t
 import { UNSAFE_ENV_KEYS, environmentFingerprint, environmentChanges, requiresEnvironmentBuild, environmentPatchCommand } from "./preview-environment.ts";
 import { restartWorktree, restartServerCommand, waitForRestart } from "./preview-restart.ts";
 import { PreviewRunQueue } from "./preview-run-queue.ts";
-import { previewDataTools, previewDataWorkspaceCommand, PREVIEW_DATA_INSTRUCTION, PREVIEW_DATA_MAINTENANCE_INSTRUCTION } from "./preview-data-operations.ts";
+import { previewDataCommand, previewDataTools, previewDataWorkspaceCommand, PREVIEW_DATA_INSTRUCTION, PREVIEW_DATA_MAINTENANCE_INSTRUCTION } from "./preview-data-operations.ts";
 import { PreviewWorkerMaintenance } from './preview-worker-maintenance.ts';
 import { branchDatabaseScript } from "./preview-isolation.ts";
 import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
@@ -149,6 +149,9 @@ async function setPreview(
   await db.update(projectEnvironments)
     .set({ ...patch, setupLog: logBuffers.get(projectId), updatedAt: new Date() })
     .where(eq(projectEnvironments.projectId, projectId));
+  // A cloud preview that just came up gets the project's saved test logins, so a login
+  // that works on the preview on someone's computer works here too (and the reverse).
+  if (patch.previewStatus === "running") void syncSavedPreviewLogins(projectId, userId, "cloud").catch(e => console.warn("[dev-preview] login sync failed:", (e as Error).message));
   broadcastToUser(userId, {
     type: "preview_status",
     projectId: pub(projectId),
@@ -2388,7 +2391,17 @@ async function driveSandbox(
 export async function runPreviewDataOperation(opts: {
   projectId:string; publicProjectId:string; userId:string; conversationId:string;
   instruction:string; abortSignal?:AbortSignal; onActivity?:()=>void; onProgress?:(detail:string)=>void;
+  /** Force one preview; otherwise the one the person is looking at. */
+  target?:'cloud'|'computer';
 }): Promise<{status:'ok'|'error';reply:string}> {
+  // The preview the person is looking at may be the one on their computer: operate on that
+  // one, never the cloud's, or a login fixed here would not work where they sign in.
+  const {runningLocalPreview,resolvePreviewWhere}=await import('./runner/preview-job.ts');
+  const local=opts.target==='cloud'?null:await runningLocalPreview(opts.userId,opts.projectId);
+  if(local)return runComputerPreviewDataOperation(opts,local);
+  if(opts.target==='computer')return {status:'error',reply:'The preview on your computer is not running. Nothing was changed.'};
+  if(opts.target!=='cloud'&&(await resolvePreviewWhere(opts.userId,{projectId:opts.projectId})).where==='computer')
+    return {status:'error',reply:'This project previews on your computer, and that preview is not running. Start it from the Preview tab, then ask again. Nothing was changed.'};
   // Share the preview lifecycle queue so branch switches/restarts cannot race a
   // multi-table data transaction. Unlike acquirePreviewRun, do not cancel work.
   const selected=await getEnv(opts.projectId);
@@ -2444,6 +2457,100 @@ export async function runPreviewDataOperation(opts: {
   }
   return {status,reply:reply||'The preview data operation did not produce a verified result. No ticket was started.'};
   } finally {release();}
+}
+
+type PreviewDataOptions=Parameters<typeof runPreviewDataOperation>[0];
+
+/**
+ * Keep test logins the same on every copy of a project's preview. The cloud preview and the
+ * one on someone's computer have separate databases; a login saved (verified) on one is
+ * recreated, with the same password, on the other when it starts. Cheap when nothing is
+ * missing: one look at which database the preview uses, no model.
+ */
+const syncingLogins=new Set<string>();
+export async function syncSavedPreviewLogins(projectId:string,userId:string,target:'cloud'|'computer'):Promise<{synced:string[];skipped?:string}> {
+  const key=`${projectId}:${target}`;
+  if(syncingLogins.has(key))return {synced:[],skipped:'already syncing'};
+  syncingLogins.add(key);
+  const {runningLocalPreview,runLocalPreviewData,planFromManifest,logLocalPreview}=await import('./runner/preview-job.ts');
+  const note=(line:string)=>target==='computer'?logLocalPreview(userId,projectId,line):plog(projectId,userId,line);
+  try {
+    const local=target==='computer'?await runningLocalPreview(userId,projectId):null;
+    if(target==='computer'&&!local)return {synced:[],skipped:'not running'};
+    const row=await getEnv(projectId);
+    const branch=environmentBranch(target==='computer'?local!.branch:row?.previewBranch);
+    const {loadAppProfile}=await import('./app-profile.ts');
+    const saved=(await loadAppProfile(projectId,branch))?.profile.previewAccounts||[];
+    if(!saved.length)return {synced:[],skipped:'no saved logins'};
+    const connectionKeys=[...new Set((planFromManifest(row?.setupManifest)?.databases??[]).map(d=>d.connectionEnvVar))];
+    if(!connectionKeys.length)return {synced:[],skipped:'no database settings'};
+    // Which database is this copy of the preview using?
+    const input={kind:'databaseInfo',connectionKeys};
+    let info:{exitCode:number;output:string};
+    if(target==='computer')info=await runLocalPreviewData(userId,projectId,input,'Check which database the preview uses');
+    else {
+      const workspaceId=await envWorkspaceId(projectId);
+      const {dir}=await resolvePreviewWorkDir(projectId,workspaceId);
+      const r=await execOnWorkspace(workspaceId,previewDataWorkspaceCommand(dir,previewDataCommand(input)),{timeout:45000});
+      info={exitCode:r.exitCode,output:(r.output||'')+(r.stderr||'')};
+    }
+    if(info.exitCode!==0)return {synced:[],skipped:'database info unavailable'};
+    const {databaseIdentity}=await import('./preview-accounts.ts');
+    const here=new Set<string>();
+    for(const c of (JSON.parse(info.output).connections||[]) as Array<{local?:boolean;engine?:string;host?:string;port?:number;database?:string}>)
+      if(c.local&&c.engine&&c.host&&c.port&&c.database)here.add(databaseIdentity({engine:c.engine,host:c.host,port:c.port,database:c.database}));
+    // Newest saved password per username; skip the ones already set up in this database.
+    const byUser=new Map<string,(typeof saved)[number]>();
+    for(const a of [...saved].sort((x,y)=>x.verifiedAt.localeCompare(y.verifiedAt)))byUser.set(a.username,a);
+    const missing=[...byUser.values()].filter(a=>!saved.some(s=>s.username===a.username&&here.has(s.identity)));
+    if(!missing.length)return {synced:[],skipped:'already in sync'};
+    const {decryptSecret}=await import('../utils/crypto.ts');
+    const logins=missing.map(a=>({username:a.username,password:decryptSecret(a.passwordEncrypted)})).filter(a=>a.password);
+    if(!logins.length)return {synced:[],skipped:'saved passwords unreadable'};
+    note(`Setting up the saved test login${logins.length>1?'s':''} in this preview's database: ${logins.map(l=>l.username).join(', ')}`);
+    const result=await runPreviewDataOperation({projectId,publicProjectId:'',userId,conversationId:'',target,instruction:[
+      'Make sure each of these saved test logins works in this preview. They were verified on another copy of this preview (it has its own database), and the person expects the same login to work here.',
+      ...logins.map(l=>`- username: ${l.username}  password: ${l.password}`),
+      'For each: inspect the auth code and schema. If the account is missing, create it with whatever records the app needs for that user to sign in and use it (for example a role or profile row the app checks). If it exists, set its password to the saved one. Hash with generateTestPassword, passing reusePassword = the saved password. Then verifyLogin and saveTestLogin.',
+      'This request explicitly authorizes restoring exactly these saved test logins now. Do not change any other account or data. In the summary, list each login and whether it works.',
+    ].join('\n')});
+    note(result.status==='ok'?`Saved test logins ready: ${logins.map(l=>l.username).join(', ')}`:`Couldn't set up the saved test logins: ${result.reply.slice(0,300)}`);
+    return {synced:result.status==='ok'?logins.map(l=>l.username):[]};
+  } finally { syncingLogins.delete(key); }
+}
+
+/** The same data operation, on the preview running on the person's computer through LFG Desktop. */
+async function runComputerPreviewDataOperation(opts:PreviewDataOptions,local:NonNullable<Awaited<ReturnType<typeof import('./runner/preview-job.ts').runningLocalPreview>>>):Promise<{status:'ok'|'error';reply:string}> {
+  const {runLocalPreviewData,planFromManifest}=await import('./runner/preview-job.ts');
+  const [env]=await db.select({manifest:projectEnvironments.setupManifest}).from(projectEnvironments).where(eq(projectEnvironments.projectId,opts.projectId)).limit(1);
+  const plan=planFromManifest(env?.manifest);
+  const connectionKeys=[...new Set((plan?.databases??[]).map(d=>d.connectionEnvVar))];
+  if(!connectionKeys.length)return {status:'error',reply:'LFG has no saved database settings for this app, so it cannot reach the database of the preview on your computer. Nothing was changed.'};
+  const driver=await resolveDriverModel(opts.userId,opts.projectId);
+  if(!driver)return {status:'error',reply:'No model is available for this preview operation.'};
+  const branch=environmentBranch(local.branch);
+  const where=`the preview on ${local.deviceName||'your computer'} (${local.url})`;
+  let reply='';let status:'ok'|'error'='error';
+  const tools={...previewDataTools({
+    run:async()=>{throw new Error('Runs on the computer');},
+    runInput:async(input,activity)=>{
+      opts.abortSignal?.throwIfAborted();
+      opts.onActivity?.();opts.onProgress?.(`${activity} on your computer`);
+      const r=await runLocalPreviewData(opts.userId,opts.projectId,input,activity);
+      opts.onActivity?.();
+      return r;
+    },
+    // Workers on the computer keep running; a transaction there still commits atomically.
+    workers:async()=>({note:'Background workers of the preview on your computer are left running.'}),
+    connectionKeys,previewUrl:local.url,
+    saveAccount:async(account)=>{const {storePreviewAccount}=await import('./preview-accounts.ts');await storePreviewAccount(opts.projectId,branch,account);
+      const {saveNote}=await import('./project-notes.ts');
+      await saveNote({projectId:opts.projectId,kind:'login',title:`Preview login: ${account.username}`,body:`Verified test login for the preview of \`${local.branch||'the default branch'}\` on your computer.\n\n- Username: \`${account.username}\`\n- Sign in at: ${local.url}`,secret:account.password,source:'agent'}).catch(e=>console.warn('[dev-preview] login note not saved:',(e as Error).message));},
+    recallAccounts:async(identity)=>{const {recallPreviewAccounts}=await import('./preview-accounts.ts');return recallPreviewAccounts(opts.projectId,branch,identity);},
+  }),reply:tool({description:'Report the actual result. Success requires evidence; return generated test credentials when requested. Never claim a ticket was needed or started.',inputSchema:zodSchema(z.object({status:z.enum(['ok','error']),summary:z.string()})),execute:async(args:{status:'ok'|'error';summary:string})=>{reply=args.summary;status=args.status;return 'acknowledged';}})};
+  try{await generateText({model:driver.model,tools,system:PREVIEW_DATA_INSTRUCTION+'\n'+PREVIEW_DATA_MAINTENANCE_INSTRUCTION+`\nThe selected preview is ${where}, branch ${local.branch??'(default)'}: its own database on that computer, separate from the cloud preview. Say so in your summary. Read code with listFiles/readFile (paths relative to the app). Registered database keys: ${connectionKeys.join(', ')}.`,prompt:opts.instruction,stopWhen:stepCountIs(40),abortSignal:opts.abortSignal,onStepFinish:()=>opts.onActivity?.()});}
+  catch(e){status='error';reply=opts.abortSignal?.aborted?'Preview data operation stopped.':`Preview data operation failed: ${(e as Error).message}`;}
+  return {status,reply:reply||'The preview data operation did not produce a verified result. No ticket was started.'};
 }
 
 /**

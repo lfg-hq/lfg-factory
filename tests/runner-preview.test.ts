@@ -229,3 +229,55 @@ test("an epic's branch and the default branch resolve; a bad branch name is refu
   expect((await preview.resolvePreviewBranch(projectId, { branch: "epic/rec-e1" })).branch).toBe("epic/rec-e1");
   await expect(preview.resolvePreviewBranch(projectId, { branch: "--upload-pack=x" })).rejects.toThrow();
 });
+
+// ── Data operations (test logins, test data) on the preview on the computer ──
+
+async function runningOnMac(protocol: number) {
+  const { projectId, publicId } = await newProject();
+  const mac = fakeConn(`mac-data-${n}`, "alice", "Alice's Mac");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [], protocol });
+  const job = await preview.startLocalPreview({ projectId, userId: "alice", branch: "epic/sdr", refresh: false });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  await say(mac, { type: "job.preview", jobId: job.id, update: { status: "running", urls: [{ name: "web", url: "http://localhost:3000", port: 3000, primary: true }] } });
+  return { projectId, publicId, mac };
+}
+
+test("a data operation goes to the preview on the computer as data only, and its result comes back", async () => {
+  const { projectId, publicId, mac } = await runningOnMac(4);
+  expect(await preview.runningLocalPreview("alice", projectId)).toMatchObject({ url: "http://localhost:3000", branch: "epic/sdr", publicProjectId: publicId });
+
+  const input = { kind: "database", connectionKey: "DATABASE_URL", sql: "select count(*) from \"user\"", params: [] };
+  const pending = preview.runLocalPreviewData("alice", projectId, input, "Checking app data");
+  await Bun.sleep(20);
+  const offer = offers(mac).find(o => o.job.type === "preview_data")!.job;
+  if (offer.type !== "preview_data") throw new Error("no data offer");
+  // Only the input travels; no program or shell command.
+  expect(offer.payload).toEqual({ protocol: 4, projectId: publicId, projectName: expect.any(String), activity: "Checking app data", input });
+  expect(JSON.stringify(offer.payload)).not.toContain("node -e");
+
+  await say(mac, { type: "job.accepted", jobId: offer.id });
+  await say(mac, { type: "job.finished", jobId: offer.id, ok: true, summary: JSON.stringify({ exitCode: 0, output: '{"rows":[{"count":"1"}]}' }) });
+  expect(await pending).toEqual({ exitCode: 0, output: '{"rows":[{"count":"1"}]}' });
+  // The finished data job leaves the preview itself alone.
+  expect((await preview.localPreviewState("alice", projectId)).previewStatus).toBe("running");
+});
+
+test("a computer that declines, or an LFG Desktop too old for data operations, is reported plainly", async () => {
+  const { projectId, mac } = await runningOnMac(4);
+  const pending = preview.runLocalPreviewData("alice", projectId, { kind: "databaseInfo", connectionKeys: [] }, "Check");
+  await Bun.sleep(20);
+  const offer = offers(mac).find(o => o.job.type === "preview_data")!.job;
+  await say(mac, { type: "job.rejected", jobId: offer.id, reason: "Declined on this computer" });
+  await expect(pending).rejects.toThrow("Declined on this computer");
+
+  const old = await runningOnMac(3);
+  await expect(preview.runLocalPreviewData("alice", old.projectId, { kind: "databaseInfo", connectionKeys: [] }, "Check")).rejects.toThrow("Update LFG Desktop");
+  expect(offers(old.mac).some(o => o.job.type === "preview_data")).toBe(false);
+});
+
+test("no data operation when the preview on the computer isn't running", async () => {
+  const { projectId } = await newProject();
+  expect(await preview.runningLocalPreview("alice", projectId)).toBeNull();
+  await expect(preview.runLocalPreviewData("alice", projectId, { kind: "databaseInfo", connectionKeys: [] }, "Check")).rejects.toThrow("isn't running");
+});

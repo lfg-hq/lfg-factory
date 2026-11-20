@@ -21,7 +21,7 @@ import { epics } from "../../db/schema/epics.ts";
 import { decryptSecret } from "../../utils/crypto.ts";
 import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
-import { cancelJob, connectedRunnerFor, enqueueJob } from "./hub.ts";
+import { cancelJob, connectedRunnerFor, deviceProtocol, enqueueJob, watchJob } from "./hub.ts";
 import { localAiSettings } from "./opt-in.ts";
 import { projectRunOn, ticketBuildWith } from "./build-target.ts";
 import { RUNNER_PROTOCOL_VERSION, type PreviewPayload, type PreviewPhase, type PreviewPlan, type PreviewStep, type PreviewUpdate, type PreviewUrl } from "./protocol.ts";
@@ -124,6 +124,11 @@ export async function applyPreviewUpdate(job: typeof runnerJobs.$inferSelect, up
   if (update.error !== undefined) state.error = update.error ? String(update.error).slice(0, 2000) : null;
   await save(job.id, state, statusChanged || !!update.urls || !!update.error);
   broadcast(job, state, update.status === "running" ? "Running on your computer" : "", lines);
+  // Just came up: give it the project's saved test logins (they may only exist in the cloud's database).
+  if (statusChanged && state.status === "running") {
+    void import("../dev-preview.ts").then(m => m.syncSavedPreviewLogins(job.projectId, job.userId, "computer"))
+      .catch(e => console.warn("[preview-job] login sync failed:", (e as Error).message));
+  }
   if (state.status === "running" || state.status === "error") for (const fn of waiters.get(job.id) ?? []) fn(state);
 }
 
@@ -345,6 +350,66 @@ export async function localPreviewState(userId: string, projectId: string) {
     waiting,
     waitingMessage: waiting ? waitingMessage(userId) : null,
   };
+}
+
+// ── Data operations on the preview on the computer ───────────────────
+
+/** Add a line to the setup log of this person's preview on their computer (LFG's own notes). */
+export async function logLocalPreview(userId: string, projectId: string, line: string): Promise<void> {
+  const job = await latestJob(userId, projectId);
+  if (!job || !["offered", "running"].includes(job.status)) return;
+  const state = readSaved(job);
+  states.set(job.id, state);
+  const entry = `[${stamp()}] ${line.slice(0, 2000)}`;
+  state.log = (state.log + entry + "\n").slice(-MAX_LOG);
+  await save(job.id, state, true);
+  broadcast(job, state, "", [entry]);
+}
+
+/** Data operations need LFG Desktop speaking protocol 4. */
+export const PREVIEW_DATA_PROTOCOL = 4;
+
+/** This person's preview of a project that is running on their computer right now, or null. */
+export async function runningLocalPreview(userId: string, projectId: string) {
+  const job = await latestJob(userId, projectId);
+  if (!job || job.status !== "running") return null;
+  const p = payloadOf(job);
+  const s = readSaved(job);
+  const url = primaryUrl(s);
+  if (!p || s.status !== "running" || !url) return null;
+  return { jobId: job.id, deviceId: job.deviceId, url, branch: p.branch, label: p.label, publicProjectId: p.projectId, projectName: p.projectName, deviceName: s.deviceName };
+}
+
+/**
+ * Run one step of a preview data operation (inspect code, query or change the database,
+ * hash a test password, verify a login) on the preview running on this person's computer.
+ * Only `input` travels; LFG Desktop runs its own copy of the fixed data program.
+ */
+export async function runLocalPreviewData(userId: string, projectId: string, input: Record<string, unknown>, activity: string,
+  timeoutMs = 90_000): Promise<{ exitCode: number; output: string }> {
+  const running = await runningLocalPreview(userId, projectId);
+  if (!running) throw new Error("The preview on your computer isn't running. Start it from the Preview tab, then try again.");
+  // The computer running the preview, and only that one, does it.
+  const protocol = running.deviceId ? deviceProtocol(running.deviceId) : null;
+  if (!running.deviceId || protocol === null) throw new Error("LFG Desktop isn't connected, so the preview on your computer can't be reached.");
+  if (protocol < PREVIEW_DATA_PROTOCOL) throw new Error("Update LFG Desktop: this version can't change data in the preview on your computer.");
+  const job = await enqueueJob({ userId, projectId, ticketId: null, type: "preview_data", deviceId: running.deviceId, payload: {
+    protocol: RUNNER_PROTOCOL_VERSION, projectId: running.publicProjectId, projectName: running.projectName, activity: activity.slice(0, 120), input,
+  } });
+  return new Promise((resolve, reject) => {
+    const stop = watchJob(job.id, update => {
+      if (update.type === "rejected") { done(); reject(new Error(`Your computer didn't run it: ${update.reason ?? "declined"}`)); }
+      if (update.type !== "finished") return;
+      done();
+      if (!update.ok) return reject(new Error(update.error ?? "The data operation failed on your computer."));
+      try {
+        const r = JSON.parse(update.summary ?? "") as { exitCode?: unknown; output?: unknown };
+        resolve({ exitCode: typeof r.exitCode === "number" ? r.exitCode : 1, output: String(r.output ?? "").slice(-12000) });
+      } catch { reject(new Error("Your computer sent back an unreadable result.")); }
+    });
+    const timer = setTimeout(() => { done(); void cancelJob(job.id); reject(new Error("Your computer didn't answer in time.")); }, timeoutMs);
+    function done() { clearTimeout(timer); stop(); }
+  });
 }
 
 /** Test hook. */

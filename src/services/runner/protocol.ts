@@ -10,7 +10,7 @@
  * RUNNER_PROTOCOL_VERSION on any incompatible change.
  */
 
-export const RUNNER_PROTOCOL_VERSION = 3;
+export const RUNNER_PROTOCOL_VERSION = 4;
 
 /** The coding agents a computer can run, headless. */
 export const AGENT_KINDS = ["claude", "codex", "copilot"] as const;
@@ -148,7 +148,24 @@ export interface PreviewUpdate {
 export type RunnerJobOffer =
   | { id: string; type: "claude_task"; payload: ClaudeTaskPayload }
   | { id: string; type: "chat_turn"; payload: ChatTurnPayload }
-  | { id: string; type: "preview"; payload: PreviewPayload };
+  | { id: string; type: "preview"; payload: PreviewPayload }
+  | { id: string; type: "preview_data"; payload: PreviewDataPayload };
+
+/**
+ * A data operation on the preview running on this computer (protocol 4): create or reset a
+ * test login, query or change test data. Only the input travels, as data; the computer runs
+ * its own copy of LFG's fixed data program (preview-data-program.ts) in the preview's folder,
+ * with the preview's database settings. Finishes with summary = JSON {exitCode, output}.
+ */
+export interface PreviewDataPayload {
+  protocol: number;
+  /** The project's public id: which running preview. */
+  projectId: string;
+  projectName: string;
+  /** What the person sees when asked, e.g. "Reset a test login". */
+  activity: string;
+  input: Record<string, unknown>;
+}
 
 export type ServerToRunner =
   | { type: "welcome"; deviceId: string; deviceName: string; protocol: number }
