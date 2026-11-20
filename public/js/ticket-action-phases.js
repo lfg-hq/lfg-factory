@@ -47,6 +47,16 @@
     if (!buildStarted && (ticket?.githubCommitSha || ticket?.github_commit_sha || rows.some(r => /Retrying validation of saved commit|Validation passed.*saved commit/.test(String(r.message || '').replace(/\*\*/g, ''))))) phases[0].status = 'saved';
     return phases;
   }
+  // Recorder evidence lives only under /uploads/ticket-tests/; never render other URLs from status data.
+  function evidenceImage(url) {
+    return typeof url === 'string' && /^\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+\/(?:(?:step|shot)-[0-9]+|failure)\.jpg$/.test(url);
+  }
+  function screenshotLink(url, label) {
+    const link = document.createElement('a');link.href = url;link.target = '_blank';link.rel = 'noopener';link.className = 'feature-evidence-shot';link.title = label;
+    const img = document.createElement('img');img.src = url;img.alt = label;img.loading = 'lazy';img.style.cssText = 'display:block;max-width:100%;max-height:180px;margin-top:6px;border:1px solid rgba(127,127,127,.35);border-radius:6px;object-fit:contain';
+    img.onerror = () => { link.textContent = label; };
+    link.append(img);return link;
+  }
   function latestFeatureRunCompleted(rows) {
     for(const row of rows.slice().reverse()) {
       const text=String(row.message||'').replace(/\*\*/g,'').trim();
@@ -278,7 +288,8 @@
                 const label=document.createElement('span');label.textContent=check.label;assertion.append(badge,label);
                 const evidence=document.createElement('div');evidence.className='assertion-evidence';
                 for(const [label,value] of [['Expected',check.expected],['Observed',check.actual],['Failure',check.error]])if(value){const p=document.createElement('p');const strong=document.createElement('strong');strong.textContent=label+': ';p.append(strong,document.createTextNode(value));evidence.append(p);}
-                if(check.steps?.length){const steps=document.createElement('ol');steps.className='assertion-steps';for(const step of check.steps){const li=document.createElement('li');li.textContent=({passed:'✓',failed:'✕',working:'…'})[step.status]+' '+step.label;if(step.target){const target=document.createElement('small');target.textContent=step.target;li.append(target);}if(step.error){const failure=document.createElement('p');failure.textContent=step.error;li.append(failure);}steps.append(li);}evidence.append(steps);}
+                if(evidenceImage(check.screenshot))evidence.append(screenshotLink(check.screenshot,'Screenshot: '+check.label));
+                if(check.steps?.length){const steps=document.createElement('ol');steps.className='assertion-steps';for(const step of check.steps){const li=document.createElement('li');li.textContent=({passed:'✓',failed:'✕',working:'…'})[step.status]+' '+step.label;if(step.target){const target=document.createElement('small');target.textContent=step.target;li.append(target);}if(step.error){const failure=document.createElement('p');failure.textContent=step.error;li.append(failure);}if(evidenceImage(step.screenshot))li.append(screenshotLink(step.screenshot,'Screenshot: '+step.label));steps.append(li);}evidence.append(steps);}
                 else {const p=document.createElement('p');p.textContent=outcome==='pending'?'Steps will appear when this assertion starts.':outcome==='not run'?'This assertion was not completed before the run ended.':'Step details were not saved for this assertion.';evidence.append(p);}
                 evidence.hidden=!expandedChecks.has(assertion.dataset.check);
                 evidence.id='check-evidence-'+live[1].split('/').pop()+'-'+index;assertion.setAttribute('aria-controls',evidence.id);
@@ -288,6 +299,8 @@
               checklist.scrollTop=scrollTop;
               if(focusedCheck)Array.from(checklist.querySelectorAll('button')).find(b=>b.dataset.check===focusedCheck)?.focus({preventScroll:true});
               if(!checks.length)counts.textContent=state.status==='working'?'Waiting for defined assertions.':'No assertion details were saved for this recording.';
+              if(evidenceImage(state.failureScreenshot)){const li=document.createElement('li');li.className='feature-checklist-note';li.append(screenshotLink(state.failureScreenshot,'Page when the test failed'));checklist.append(li);}
+              for(const warning of (state.warnings||[]).slice(0,5)){const li=document.createElement('li');li.className='feature-checklist-note feature-warning';li.textContent='⚠ '+warning;checklist.append(li);}
 
               status.hidden=false;
               const stale=Date.now()-state.updatedAt>45000;
@@ -297,7 +310,7 @@
                 frame.hidden=true;frame.onload=null;
                 const available=await fetch(live[1]+'/recording.mp4',{method:'HEAD',credentials:'same-origin'});
                 if(available.ok){replay.src=live[1]+'/recording.mp4';replay.hidden=false;placeholder.hidden=true;}
-                else status.textContent+=' No video was captured for this attempt.';
+                else status.textContent+=' No video was captured for this attempt'+(evidenceImage(state.failureScreenshot)?'; see the failure screenshot.':'.');
                 return;
               }
             }catch(error){status.hidden=false;misses++;status.textContent='Live view reconnecting — '+error.message+'. Last captured screen retained.';}

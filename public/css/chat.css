@@ -3456,6 +3456,9 @@ input:checked + .turbo-slider + .turbo-label,
     pointer-events: none;   /* the empty stretch before the mic still reaches the textarea */
 }
 #chat-form .left-actions > * { flex-shrink: 0; pointer-events: auto; }
+/* The settings menu stays in the row while closed (invisible, over the textarea):
+   it must not catch clicks or show a hand cursor until it is open. */
+#chat-form .left-actions > .settings-dropdown:not(.open) { pointer-events: none; visibility: hidden; }
 #chat-form .left-actions > .status-indicators {
     flex: 0 1 auto;
     min-width: 0;

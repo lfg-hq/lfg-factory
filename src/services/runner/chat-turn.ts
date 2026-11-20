@@ -13,6 +13,7 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../../config/db.ts";
 import { env } from "../../config/env.ts";
 import { runnerJobs } from "../../db/schema/runners.ts";
+import { projects } from "../../db/schema/projects.ts";
 import { cancelJob, enqueueJob, userHasConnectedRunner, watchJob, type JobUpdate } from "./hub.ts";
 import { mintTurnToken, revokeTurnToken } from "./turn-tokens.ts";
 import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, type AgentEffort, type AgentEvent, type AgentKind } from "./protocol.ts";
@@ -114,19 +115,23 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
   const freshPrompt = earlier ? `## The conversation so far\n\n${earlier}\n\n## The user's new message\n\n${message}` : message;
   const prompt = sessionId ? message : freshPrompt;
 
+  // Previews on the computer are keyed by the project's public id (preview-job.ts).
+  const [project] = input.projectId ? await db.select({ publicId: projects.projectId }).from(projects).where(eq(projects.id, input.projectId)).limit(1) : [];
+  const previewProjectId = input.projectId ? project?.publicId ?? input.projectId : undefined;
   const { turnId, token } = await mintTurnToken({ userId: input.userId, conversationId: input.conversationId, projectId: input.projectId, messageId: input.messageId });
   const origin = (input.serverUrl ?? (env.APP_URL || env.BETTER_AUTH_URL)).replace(/\/+$/, "");
   const job = await enqueueJob({
     userId: input.userId, projectId: input.projectId ?? "", conversationId: input.conversationId, type: "chat_turn",
     payload: {
       protocol: RUNNER_PROTOCOL_VERSION, agent: input.agent, conversationId: input.conversationId,
+      ...(previewProjectId ? { projectId: previewProjectId } : {}),
       prompt, sessionId, ...(sessionId ? { freshPrompt } : {}),
       // LFG's prompt is the whole system prompt where the CLI allows it (Claude Code), so a
       // chat answers as it does on the web rather than as a coding assistant.
       instructionsMode: "replace",
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
-      instructions: `${input.instructions}\n\nLFG's tools are available through the MCP server named "lfg"; the tool names in these instructions refer to them. Use them for anything that should be saved or shared (documents, tickets, epics, notes): that is how your work reaches the user's team. The tools available can change between messages (LFG is updated, a connection is restored): if an earlier message in this conversation says a tool was unavailable or failed, call it again now before telling the user you can't do something. When your working folder is a checkout of the project's repository, read its files directly for questions about the code or what the app does.`,
+      instructions: `${input.instructions}\n\nLFG's tools are available through the MCP server named "lfg"; the tool names in these instructions refer to them. Use them for anything that should be saved or shared (documents, tickets, epics, notes): that is how your work reaches the user's team. The tools available can change between messages (LFG is updated, a connection is restored): if an earlier message in this conversation says a tool was unavailable or failed, call it again now before telling the user you can't do something. When your working folder is a checkout of the project's repository, read its files directly for questions about the code or what the app does. When the project's preview runs on the user's computer, the MCP server named "preview" has a browser tool for it: use it to sign in, click through a feature and look at screenshots when asked to test or check something in the app, and say what you saw rather than what the code suggests. The preview's code is readable too (its folder is added to your workspace). If no preview is running there, the tool says so: ask the user to start it in the Preview tab.`,
       mcp: { url: `${origin}/mcp/turn/${turnId}`, token },
     },
   });
