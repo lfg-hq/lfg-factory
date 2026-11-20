@@ -31,6 +31,10 @@ export interface AgentRunInput {
   sessionId?: string;
   /** LFG's MCP server for this turn. */
   mcp?: { url: string; token: string };
+  /** Local stdio MCP servers started next to the agent (Claude Code only), e.g. the preview browser. */
+  localMcp?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+  /** More folders the agent may read (Claude Code `--add-dir`), e.g. the preview's checkout. */
+  addDirs?: string[];
   /** Claude Code tool allow-list (other agents use their own sandbox settings). */
   allowedTools?: string[];
   maxTurns?: number;
@@ -61,7 +65,12 @@ const asText = (v: unknown): string =>
 const claude: AgentAdapter = {
   kind: "claude", label: "Claude Code", bin: "claude",
   invocation(i) {
-    const tools = [...(i.readOnly ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : i.allowedTools ?? []), ...(i.mcp ? ["mcp__lfg"] : [])];
+    const local = Object.entries(i.localMcp ?? {});
+    const tools = [...(i.readOnly ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : i.allowedTools ?? []), ...(i.mcp ? ["mcp__lfg"] : []), ...local.map(([name]) => `mcp__${name}`)];
+    const servers: Record<string, unknown> = {
+      ...(i.mcp ? { lfg: { type: "http", url: i.mcp.url, headers: { Authorization: `Bearer ${i.mcp.token}` } } } : {}),
+      ...Object.fromEntries(local.map(([name, s]) => [name, { type: "stdio", command: s.command, args: s.args, ...(s.env ? { env: s.env } : {}) }])),
+    };
     return {
       bin: "claude",
       args: [
@@ -72,7 +81,8 @@ const claude: AgentAdapter = {
         ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
         ...(i.maxTurns ? ["--max-turns", String(i.maxTurns)] : []),
         ...(i.sessionId ? ["--resume", i.sessionId] : []),
-        ...(i.mcp ? ["--mcp-config", JSON.stringify({ mcpServers: { lfg: { type: "http", url: i.mcp.url, headers: { Authorization: `Bearer ${i.mcp.token}` } } } })] : []),
+        ...(i.addDirs ?? []).flatMap(d => ["--add-dir", d]),
+        ...(Object.keys(servers).length ? ["--mcp-config", JSON.stringify({ mcpServers: servers })] : []),
       ],
       // LFG's tools can wait on the person (askUser), so give MCP calls room.
       env: i.mcp ? { MCP_TOOL_TIMEOUT: String(30 * 60_000) } : undefined,

@@ -15,14 +15,16 @@
 
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import os from "node:os";
-import type { AgentEvent, AgentKind, ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import type { AgentEvent, AgentKind, ClaudeTaskPayload, PreviewUrl, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
 import { RUNNER_PROTOCOL_VERSION, isAgentEffort, isAgentModel } from "./protocol.ts";
 import { LocalPreview, PreviewStopped, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 import { mustRun, run } from "./proc.ts";
+import { previewBrowserStateFile, type PreviewState } from "./preview-browser.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
 
@@ -98,7 +100,7 @@ export class Runner {
   private watchdog: ReturnType<typeof setInterval> | null = null;
   readonly active = new Map<string, ActiveJob>();
   /** Running previews, one per project: project id → its job and processes. */
-  private readonly previews = new Map<string, { jobId: string; preview: LocalPreview; stopping?: Promise<void> }>();
+  private readonly previews = new Map<string, PreviewEntry>();
   /** Preview offers still being approved or waiting for the one they replace, and any cancelled meanwhile. */
   private readonly previewOffers = new Set<string>();
   private readonly cancelledOffers = new Set<string>();
@@ -106,8 +108,24 @@ export class Runner {
 
   constructor(private readonly opts: RunnerOptions) {}
 
+  /**
+   * The previews running here, for the chat agent's preview browser (preview-browser.ts):
+   * it may only open these addresses, and re-reads this file on every step.
+   */
+  private syncPreviewState() {
+    const state: PreviewState = { previews: [...this.previews.entries()].filter(([, e]) => e.urls?.length && !e.stopping)
+      .map(([project, e]) => ({ project, projectName: e.preview.payload.projectName, dir: e.preview.dir, urls: e.urls! })) };
+    try {
+      const file = previewBrowserStateFile(this.opts.workRoot);
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file + ".tmp", JSON.stringify(state));
+      renameSync(file + ".tmp", file);
+    } catch (e) { this.log(`could not record running previews: ${(e as Error).message}`); }
+  }
+
   start(): void {
     this.stopped = false;
+    this.syncPreviewState(); // nothing runs yet: forget previews from an earlier session
     this.connect();
     // A connection can die without a close event (sleep, a new Wi-Fi address, a proxy
     // dropping it, the server restarting while the laptop was away). Silence from a
@@ -141,7 +159,8 @@ export class Runner {
     if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     if (this.retry) clearTimeout(this.retry);
     for (const job of this.active.values()) { job.cancelled = true; job.child?.kill("SIGTERM"); }
-    for (const p of this.previews.values()) void p.preview.stop();
+    for (const p of this.previews.values()) { p.stopping ??= p.preview.stop(); }
+    this.syncPreviewState();
     this.socket?.close(1000, "Runner stopped");
     this.setState("stopped");
   }
@@ -208,7 +227,8 @@ export class Runner {
         for (const [key, p] of this.previews) {
           if (p.jobId !== msg.jobId) continue;
           p.stopping ??= p.preview.stop();
-          void p.stopping.then(() => { if (this.previews.get(key) === p) this.previews.delete(key); this.active.delete(p.jobId); });
+          this.syncPreviewState();
+          void p.stopping.then(() => { if (this.previews.get(key) === p) this.previews.delete(key); this.active.delete(p.jobId); this.syncPreviewState(); });
         }
         this.queue = this.queue.filter(j => j.id !== msg.jobId);
         return;
@@ -299,11 +319,13 @@ export class Runner {
       mkdirSync(cwd, { recursive: true });
       const model = isAgentModel(p.model) ? p.model : undefined;
       const effort = isAgentEffort(p.effort) ? p.effort : undefined;
+      const browser = this.previewBrowserFor(p.projectId);
       const attempt = (sessionId?: string) => runAgent(agent, {
         // No session to continue here: the fuller prompt carries the conversation so far.
         prompt: sessionId ? p.prompt : p.freshPrompt || p.prompt,
         instructions: p.instructions, instructionsMode: p.instructionsMode === "replace" ? "replace" : "append",
         model, effort, sessionId, mcp: p.mcp, readOnly: true, cwd,
+        ...(browser ? { localMcp: browser.mcp, addDirs: browser.dirs } : {}),
         env: this.opts.env ?? process.env, bin: this.bins()[agent],
         onEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
         onSpawn: child => { active.child = child; },
@@ -345,7 +367,7 @@ export class Runner {
     // One preview per project here: the one it replaces must be gone (ports, files) first.
     const key = previewFolderName(p.projectId);
     const previous = this.previews.get(key);
-    if (previous) { await (previous.stopping ??= previous.preview.stop()); this.active.delete(previous.jobId); }
+    if (previous) { const stopping = previous.stopping ??= previous.preview.stop(); this.syncPreviewState(); await stopping; this.active.delete(previous.jobId); }
     if (this.cancelledOffers.has(job.id)) return; // stopped or replaced while the person was deciding
 
     const active: ActiveJob = { cancelled: false };
@@ -360,11 +382,12 @@ export class Runner {
       approveNodeDownload: this.opts.approveNodeDownload ? info => this.opts.approveNodeDownload!({ ...info, projectName: p.projectName }) : undefined,
       update: update => this.send({ type: "job.preview", jobId: job.id, update }),
     });
-    const entry: { jobId: string; preview: LocalPreview; stopping?: Promise<void> } = { jobId: job.id, preview };
+    const entry: PreviewEntry = { jobId: job.id, preview };
     this.previews.set(key, entry);
     const current = () => this.previews.get(key) === entry && !active.cancelled;
     const finish = (error: string) => {
       if (this.previews.get(key) === entry) this.previews.delete(key);
+      this.syncPreviewState();
       this.active.delete(job.id);
       if (active.cancelled) return;
       this.send({ type: "job.preview", jobId: job.id, update: { status: "error", error: error.slice(0, 2000) } });
@@ -375,11 +398,14 @@ export class Runner {
     try {
       const urls = await preview.start();
       if (!current()) { await preview.stop(); return; }
+      entry.urls = urls;
+      this.syncPreviewState();
       this.opts.onJob?.({ jobId: job.id, title, phase: "started", detail: `Running at ${urls.map(u => u.url).join(", ")}` });
     } catch (error) {
       await (entry.stopping ??= preview.stop());
       if (error instanceof PreviewStopped || active.cancelled) {
         if (this.previews.get(key) === entry) this.previews.delete(key);
+        this.syncPreviewState();
         this.active.delete(job.id);
         return;
       }
@@ -387,10 +413,40 @@ export class Runner {
     }
   }
 
+  /**
+   * The preview browser for a chat turn (Claude Code): an MCP server on this computer that
+   * can open only the previews running here — the turn's project's when the server says
+   * which project it is — plus read access to those previews' code.
+   */
+  private previewBrowserFor(projectId: string | undefined) {
+    const key = projectId ? previewFolderName(projectId) : undefined;
+    this.syncPreviewState();
+    const running = [...this.previews.entries()].filter(([k, e]) => (!key || k === key) && e.urls?.length && !e.stopping);
+    return {
+      mcp: {
+        preview: {
+          command: process.execPath,
+          args: [PREVIEW_BROWSER_SCRIPT],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            LFG_PREVIEW_STATE: previewBrowserStateFile(this.opts.workRoot),
+            ...(key ? { LFG_PREVIEW_PROJECT: key } : {}),
+            LFG_PREVIEW_PROFILE: join(this.opts.workRoot, "preview-browser", key ?? "default"),
+          },
+        },
+      },
+      dirs: running.map(([, e]) => e.preview.dir).filter(d => existsSync(d)),
+    };
+  }
+
   private bins(): Partial<Record<AgentKind, string>> {
     return { ...(this.opts.claudeBin ? { claude: this.opts.claudeBin } : {}), ...this.opts.agentBins };
   }
 }
+
+interface PreviewEntry { jobId: string; preview: LocalPreview; stopping?: Promise<void>; urls?: PreviewUrl[] }
+
+const PREVIEW_BROWSER_SCRIPT = fileURLToPath(new URL("./preview-browser.js", import.meta.url));
 
 // ── Job execution ────────────────────────────────────────────────────
 

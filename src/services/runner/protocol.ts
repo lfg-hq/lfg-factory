@@ -77,6 +77,8 @@ export interface ChatTurnPayload {
   protocol: number;
   agent: AgentKind;
   conversationId: string;
+  /** The project the chat is in, when it is in one: its preview on this computer is the one the agent may use. */
+  projectId?: string;
   /** The person's message, plus the conversation so far when there's no session to resume. */
   prompt: string;
   /** LFG's instructions for the assistant (the chat's system prompt). */
