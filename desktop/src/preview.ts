@@ -146,7 +146,27 @@ export function localizeCommand(cmd: string, dir: string): string {
 
 // ── One running preview ──────────────────────────────────────────────
 
-interface Meta { branch: string | null; installedCommit?: string; installedNode?: string; seeded?: string[]; secrets?: Record<string, string> }
+interface Meta { branch: string | null; installedCommit?: string; installedNode?: string; installedDeps?: string; seeded?: string[]; secrets?: Record<string, string> }
+
+/** Files whose change means the app's libraries must be installed again (any folder depth). */
+const DEPENDENCY_FILES = ["package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb",
+  ".npmrc", ".nvmrc", ".node-version", "requirements*.txt", "pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "Gemfile", "Gemfile.lock",
+  "composer.json", "composer.lock", "go.sum", "*.csproj", "packages.lock.json"];
+
+/**
+ * A fingerprint of what the install step depends on: the dependency files' committed
+ * contents, the install command and the Node.js version. Same fingerprint, same
+ * libraries, so a new commit that only changed app code skips the reinstall.
+ * null when it can't be worked out (then always install).
+ */
+export async function dependencyFingerprint(dir: string, installCmd: string, node: string | null, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const listed = await run("git", ["ls-files", "-s", "--", ...DEPENDENCY_FILES.map(f => `:(glob)**/${f}`)], { cwd: dir, env });
+  if (listed.code !== 0) return null;
+  // Uncommitted edits to those files (rare in a preview folder) also count.
+  const dirty = await run("git", ["status", "--porcelain", "--", ...DEPENDENCY_FILES.map(f => `:(glob)**/${f}`)], { cwd: dir, env });
+  if (dirty.code !== 0 || dirty.stdout.trim()) return null;
+  return createHash("sha256").update(JSON.stringify([installCmd, node, listed.stdout])).digest("hex").slice(0, 32);
+}
 
 export class PreviewStopped extends Error { constructor() { super("Stopped"); } }
 
@@ -332,8 +352,13 @@ export class LocalPreview {
       this.log(`Switching from Node ${before.installedNode} to ${fmt(node)}: reinstalling dependencies.`);
       rmSync(join(this.dir, "node_modules"), { recursive: true, force: true });
     }
+    // A new commit that left the dependency files alone keeps what's installed: npm ci
+    // throws node_modules away and reinstalls everything, which is most of a restart.
+    const deps = plan.installCmd ? await dependencyFingerprint(this.dir, plan.installCmd, node ? fmt(node) : null, appEnv).catch(() => null) : null;
+    const libsMissing = usesNode && !existsSync(join(this.dir, "node_modules"));
+    const installNeeded = fresh && (!deps || before?.installedDeps !== deps || libsMissing);
     if (plan.installCmd) {
-      if (fresh) {
+      if (installNeeded) {
         await this.step("install", "Install dependencies", "installing", async () => {
           await this.shell(plan.installCmd!, appEnv);
           // Installed packages can need a newer Node than the project says (Next.js 16: >= 20.9).
@@ -347,14 +372,15 @@ export class LocalPreview {
             }
           }
         }, plan.installCmd);
-      } else this.skip("install", "Install dependencies", "already installed for this commit");
+      } else this.skip("install", "Install dependencies", fresh ? "dependencies unchanged since the last install" : "already installed for this commit");
     }
     const builds = [plan.buildCmd, ...(plan.services ?? []).map(s => s.buildCmd)].filter((c): c is string => !!c);
     if (builds.length) {
       if (fresh) await this.step("build", "Build", "installing", async () => { for (const b of builds) await this.shell(b, appEnv); }, builds.join(" && "));
       else this.skip("build", "Build", "already built for this commit");
     }
-    this.writeMeta({ ...(this.readMeta() ?? { branch: p.branch }), installedCommit: commit, ...(node ? { installedNode: fmt(node) } : {}) });
+    const installedDeps = plan.installCmd ? await dependencyFingerprint(this.dir, plan.installCmd, node ? fmt(node) : null, appEnv).catch(() => null) : null;
+    this.writeMeta({ ...(this.readMeta() ?? { branch: p.branch }), installedCommit: commit, ...(node ? { installedNode: fmt(node) } : {}), installedDeps: installedDeps ?? undefined });
 
     // 5. Schema and seed data.
     if (plan.migrations?.length) {
