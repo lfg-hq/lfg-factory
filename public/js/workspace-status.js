@@ -1,6 +1,6 @@
 // At-a-glance workspace status for the chat page:
-// - icons in the chat header for Docs, Tickets and Preview (the Tickets icon pulses while
-//   something builds); each opens the side panel on that tab;
+// - counts on the side panel's Docs / Tickets / Preview tabs, and, while the panel is
+//   closed, one pill in the chat header with the same status that opens the panel;
 // - a build bar pinned above the message box while tickets build, so progress stays in
 //   view however far the conversation scrolls.
 (function () {
@@ -34,45 +34,65 @@
     return t.where === 'computer' ? 'on your computer' + (t.agent && AGENTS[t.agent] ? ' · ' + AGENTS[t.agent] : '') : 'in the cloud';
   }
 
-  // ── Header icons ─────────────────────────────────────────────────────
-  function chip(id, icon, label, tab) {
-    const b = el('button', 'ws-chip');
-    b.type = 'button'; b.id = id;
-    b.innerHTML = '<i class="fas ' + icon + '" aria-hidden="true"></i><span class="ws-chip-text"></span><span class="ws-chip-dot" aria-hidden="true"></span>';
+  // ── Counts live on the panel's own tabs ──────────────────────────────
+  // While the panel is open, its Docs / Tickets / Preview tabs carry the counts and the
+  // preview dot, so the header needs no buttons of its own. While it is closed, one quiet
+  // pill in the header ("Docs 14 · Tickets 22 · Preview ●") keeps the status in view.
+  function previewKind() {
+    const p = String((state && state.preview) || 'idle');
+    return p === 'running' ? 'running' : p === 'error' ? 'error' : /^(detecting|provisioning|installing|seeding|starting)$/.test(p) ? 'starting' : 'idle';
+  }
+  const PREVIEW_WORDS = { running: 'running', error: 'failed', starting: 'starting', idle: 'not running' };
+  function tabBadge(tab) {
+    const btn = document.querySelector('.tab-button[data-tab="' + tab + '"]');
+    if (!btn) return null;
+    let badge = btn.querySelector('.ws-tab-badge');
+    if (!badge) { badge = el('span', 'ws-tab-badge'); badge.setAttribute('aria-hidden', 'true'); btn.append(badge); }
+    return badge;
+  }
+  function paintTabs() {
+    const docs = tabBadge('filebrowser');
+    if (docs) { docs.textContent = state.docs ? String(state.docs) : ''; docs.dataset.state = 'idle'; }
+    const tickets = tabBadge('checklist');
+    const n = state.building.length;
+    if (tickets) {
+      tickets.textContent = n ? n + ' building' : (state.tickets ? String(state.tickets) : '');
+      tickets.dataset.state = n ? 'building' : 'idle';
+      tickets.parentElement.title = n
+        ? 'Building: ' + state.building.map(t => (t.key || 'ticket') + ' ' + t.label.toLowerCase()).join(', ')
+        : state.tickets + (state.tickets === 1 ? ' ticket' : ' tickets');
+    }
+    const preview = tabBadge('preview');
+    if (preview) {
+      preview.textContent = '';
+      preview.dataset.state = 'dot-' + previewKind();
+      preview.parentElement.title = 'Preview: ' + PREVIEW_WORDS[previewKind()];
+    }
+  }
+  function segment(text, tab, label) {
+    const b = el('button', 'ws-seg'); b.type = 'button';
+    b.append(el('span', null, text));
     b.title = label; b.setAttribute('aria-label', label);
     b.addEventListener('click', () => openTab(tab));
     return b;
   }
-  function ensureChips() {
+  function paintPill() {
     const actions = document.querySelector('.chat-header-actions');
-    if (!actions || document.getElementById('ws-chips')) return !!actions;
-    const wrap = el('div', 'ws-chips'); wrap.id = 'ws-chips';
-    wrap.append(chip('ws-docs', 'fa-file-lines', 'Docs', 'filebrowser'), chip('ws-tickets', 'fa-list-check', 'Tickets', 'checklist'), chip('ws-preview', 'fa-desktop', 'Preview', 'preview'));
-    actions.insertBefore(wrap, actions.firstChild);
-    return true;
+    if (!actions) return;
+    let pill = document.getElementById('ws-chips');
+    if (!pill) { pill = el('div', 'ws-pill'); pill.id = 'ws-chips'; actions.insertBefore(pill, actions.firstChild); }
+    const n = state.building.length;
+    const kind = previewKind();
+    const tickets = segment(n ? n + ' building' : 'Tickets ' + (state.tickets || 0), 'checklist', n ? 'Tickets: ' + n + ' building' : 'Open Tickets');
+    if (n) tickets.dataset.state = 'building';
+    const preview = segment('Preview', 'preview', 'Preview: ' + PREVIEW_WORDS[kind]);
+    preview.append(el('span', 'ws-dot'));
+    preview.dataset.state = kind;
+    pill.replaceChildren(segment('Docs ' + (state.docs || 0), 'filebrowser', 'Open Docs'), tickets, preview);
   }
   function paintChips() {
-    if (!state || !ensureChips()) return;
-    const docs = document.getElementById('ws-docs');
-    docs.querySelector('.ws-chip-text').textContent = state.docs ? String(state.docs) : '';
-    docs.title = state.docs + (state.docs === 1 ? ' doc' : ' docs') + ' · open Docs';
-    docs.setAttribute('aria-label', docs.title);
-
-    const tickets = document.getElementById('ws-tickets');
-    const n = state.building.length;
-    tickets.dataset.state = n ? 'building' : 'idle';
-    tickets.querySelector('.ws-chip-text').textContent = n ? n + ' building' : (state.tickets ? String(state.tickets) : '');
-    tickets.title = n
-      ? n + (n === 1 ? ' ticket is' : ' tickets are') + ' building: ' + state.building.map(t => (t.key || 'ticket') + ' ' + t.label.toLowerCase()).join(', ') + ' · open Tickets'
-      : state.tickets + (state.tickets === 1 ? ' ticket' : ' tickets') + ' · open Tickets';
-    tickets.setAttribute('aria-label', tickets.title);
-
-    const preview = document.getElementById('ws-preview');
-    const p = String(state.preview || 'idle');
-    const kind = p === 'running' ? 'running' : p === 'error' ? 'error' : /^(detecting|provisioning|installing|seeding|starting)$/.test(p) ? 'starting' : 'idle';
-    preview.dataset.state = kind;
-    preview.title = 'Preview: ' + ({ running: 'running', error: 'failed', starting: 'starting', idle: 'not running' })[kind] + ' · open Preview';
-    preview.setAttribute('aria-label', preview.title);
+    if (!state) return;
+    paintTabs(); paintPill();
   }
 
   // ── Build bar above the message box ──────────────────────────────────
