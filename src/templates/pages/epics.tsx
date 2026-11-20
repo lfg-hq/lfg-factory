@@ -567,7 +567,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
   </div>
 
 <script src="/public/js/marked.min.js"></script>
-<script src="/public/js/markdown-config.js"></script>
+<script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
 <script src="/public/js/epic-content.js?v=20260923-reader"></script>
 <script src="/public/js/sidebar.js?v=20261118-peek"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>

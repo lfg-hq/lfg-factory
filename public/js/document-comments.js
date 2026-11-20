@@ -437,10 +437,15 @@
       .then(function () { ta.value = ""; state.panelOpen = true; loadComments(); });
   };
 
+  // A reply the agent wrote, labelled as the agent (it acts for the person who asked it).
+  function authorAgent(forName) {
+    return '<span title="' + escapeHtml("Written by the AI agent" + (forName ? " for " + forName : "")) + '"><i class="fas fa-robot" aria-hidden="true" style="margin-right:4px;opacity:.75;"></i>AI agent</span>';
+  }
+
   function renderCommentCard(comment, isResolved) {
     var card = '<div class="comment-card' + (isResolved ? ' resolved' : '') + '" data-comment-id="' + comment.id + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
-        '<div style="font-size:0.8125rem;font-weight:500;color:var(--text-color);">' + escapeHtml(comment.userName || "User") + '</div>' +
+        '<div style="font-size:0.8125rem;font-weight:500;color:var(--text-color);">' + (comment.byAgent ? authorAgent(comment.userName) : escapeHtml(comment.userName || "User")) + '</div>' +
         '<div style="display:flex;gap:0.25rem;">' +
           '<button onclick="resolveComment(\'' + comment.id + '\')" title="' + (isResolved ? 'Unresolve' : 'Resolve') + '" style="background:none;border:none;color:' + (isResolved ? '#22c55e' : 'var(--text-secondary)') + ';cursor:pointer;font-size:0.75rem;"><i class="fas fa-check-circle"></i></button>' +
           '<button onclick="deleteComment(\'' + comment.id + '\')" title="Delete" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.75rem;"><i class="fas fa-trash"></i></button>' +
@@ -456,7 +461,7 @@
       card += '<div style="margin-top:0.5rem;padding-left:0.75rem;border-left:2px solid var(--border-color);">';
       comment.replies.forEach(function (r) {
         card += '<div style="margin-bottom:0.4rem;">' +
-          '<span style="font-size:0.75rem;font-weight:500;color:var(--text-color);">' + escapeHtml(r.userName || "User") + '</span>' +
+          '<span style="font-size:0.75rem;font-weight:500;color:var(--text-color);">' + (r.byAgent ? authorAgent(r.userName) : escapeHtml(r.userName || "User")) + '</span>' +
           '<div style="font-size:0.8125rem;color:var(--text-color);">' + escapeHtml(r.content) + '</div>' +
         '</div>';
       });

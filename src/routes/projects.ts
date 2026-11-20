@@ -1337,21 +1337,38 @@ projectsRouter.delete("/projects/:projectId/api/files", async (c) => {
 });
 
 // ── GET /projects/:projectId/api/files/:fileId/versions — list versions
-projectsRouter.get("/projects/:projectId/api/files/:fileId/versions", async (c) => {
-  const { fileId } = c.req.param();
+/** The file, when the user can see this project and the file belongs to it (and, for edits, may edit files). */
+async function fileInProject(userId: string, projectId: string, fileId: string, edit = false) {
+  const access = await getProjectAccess(projectId, userId);
+  if (!access) return { error: "Project not found", status: 404 as const };
+  if (edit) { try { requirePermission(access, "canEditFiles"); } catch { return { error: "Forbidden", status: 403 as const }; } }
+  const [file] = await db.select().from(projectFiles).where(and(eq(projectFiles.id, fileId), eq(projectFiles.projectId, access.project.id)));
+  if (!file) return { error: "File not found", status: 404 as const };
+  return { file };
+}
 
-  const versions = await db
-    .select()
+projectsRouter.get("/projects/:projectId/api/files/:fileId/versions", async (c) => {
+  const { projectId, fileId } = c.req.param();
+  const found = await fileInProject(c.get("user").id, projectId!, fileId!);
+  if (!("file" in found)) return c.json({ error: found.error }, found.status);
+
+  const rows = await db
+    .select({ version: projectFileVersions, authorName: users.name })
     .from(projectFileVersions)
+    .leftJoin(users, eq(users.id, projectFileVersions.createdById))
     .where(eq(projectFileVersions.fileId, fileId!))
     .orderBy(desc(projectFileVersions.versionNumber));
+  // The author's name, for display: the raw user id meant nothing to anyone.
+  const versions = rows.map(({ version, authorName }) => ({ ...version, createdByName: authorName ?? null }));
 
   return c.json({ versions });
 });
 
 // ── GET /projects/:projectId/api/files/:fileId/versions/:versionNumber — fetch single version content
 projectsRouter.get("/projects/:projectId/api/files/:fileId/versions/:versionNumber", async (c) => {
-  const { fileId, versionNumber } = c.req.param();
+  const { projectId, fileId, versionNumber } = c.req.param();
+  const found = await fileInProject(c.get("user").id, projectId!, fileId!);
+  if (!("file" in found)) return c.json({ success: false, error: found.error }, found.status);
 
   const [version] = await db
     .select()
@@ -1367,7 +1384,9 @@ projectsRouter.get("/projects/:projectId/api/files/:fileId/versions/:versionNumb
 // ── POST /projects/:projectId/api/files/:fileId/versions/:versionId/restore
 projectsRouter.post("/projects/:projectId/api/files/:fileId/versions/:versionNumber/restore", async (c) => {
   const user = c.get("user");
-  const { fileId, versionNumber } = c.req.param();
+  const { projectId, fileId, versionNumber } = c.req.param();
+  const found = await fileInProject(user.id, projectId!, fileId!, true);
+  if (!("file" in found)) return c.json({ error: found.error }, found.status);
 
   const [version] = await db
     .select()
@@ -1376,8 +1395,7 @@ projectsRouter.post("/projects/:projectId/api/files/:fileId/versions/:versionNum
 
   if (!version) return c.json({ error: "Version not found" }, 404);
 
-  const [file] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId!));
-  if (!file) return c.json({ error: "File not found" }, 404);
+  const file = found.file!;
 
   // Snapshot current content before restoring
   const currentContent = await getContent(file.s3Key, file.content);

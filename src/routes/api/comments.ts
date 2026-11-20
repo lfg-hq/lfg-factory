@@ -148,6 +148,7 @@ commentsApi.get("/:projectId/files/:fileId/comments", async (c) => {
       updatedAt: documentComments.updatedAt,
       userName: users.name,
       userEmail: users.email,
+      byAgent: documentComments.byAgent,
     })
     .from(documentComments)
     .innerJoin(users, eq(documentComments.userId, users.id))
@@ -170,6 +171,7 @@ commentsApi.get("/:projectId/files/:fileId/comments", async (c) => {
       createdAt: documentComments.createdAt,
       userName: users.name,
       userEmail: users.email,
+      byAgent: documentComments.byAgent,
     })
     .from(documentComments)
     .innerJoin(users, eq(documentComments.userId, users.id))

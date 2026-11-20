@@ -836,6 +836,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       tools.getPreviewDiagnostics = previewDiagnosticsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     }
     if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
+    if (projectId) Object.assign(tools, (await import('./tools/comment-tools.ts')).commentTools({projectId:internalProjectId,userId}));
     // Whiteboards store the PUBLIC project id, like conversations do.
     if (projectId) Object.assign(tools, (await import('./tools/whiteboard-tools.ts')).whiteboardTools({projectId,userId}));
     // Evals for the AI agent the project is building (also keyed by the PUBLIC project id).

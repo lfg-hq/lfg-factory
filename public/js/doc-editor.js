@@ -94,6 +94,57 @@
   // document-comments.js used to wrap highlighted text in <mark> by editing the DOM.
   // ProseMirror owns this DOM now and would treat that as an edit, so highlights are
   // decorations instead — drawn on top, never part of the saved markdown.
+  // Diagrams: a ```mermaid block is drawn as the diagram, not shown as its source. It stays
+  // a code block in the document, so saving writes the same markdown back. The source is
+  // under the diagram's "Diagram source"; to change a diagram, ask the agent or edit the raw
+  // markdown.
+  function diagramExtension(T) {
+    function codeView(node) {
+      var pre = document.createElement("pre");
+      var code = document.createElement("code");
+      if (node.attrs.language) code.className = "language-" + node.attrs.language;
+      pre.appendChild(code);
+      return { dom: pre, contentDOM: code };
+    }
+    function diagramView(node) {
+      var dom = document.createElement("div");
+      dom.className = "doc-editor-diagram";
+      dom.contentEditable = "false";
+      function draw(n) {
+        var pre = document.createElement("pre");
+        var code = document.createElement("code");
+        code.className = "language-mermaid";
+        code.textContent = n.textContent;
+        pre.appendChild(code);
+        dom.replaceChildren(pre);
+        Promise.resolve(window.mermaidRendererReady)
+          .then(function () { return window.renderMermaidDiagrams && window.renderMermaidDiagrams(dom); })
+          .catch(function () { /* the source stays visible */ });
+      }
+      draw(node);
+      return {
+        dom: dom,
+        update: function (next) {
+          if (next.type !== node.type || next.attrs.language !== "mermaid") return false;
+          if (next.textContent !== node.textContent) draw(next);
+          node = next;
+          return true;
+        },
+        ignoreMutation: function () { return true; },
+        stopEvent: function () { return true; },
+      };
+    }
+    return T.Extension.create({
+      name: "lfgDiagrams",
+      addProseMirrorPlugins: function () {
+        return [new T.Plugin({
+          key: new T.PluginKey("lfgDiagrams"),
+          props: { nodeViews: { codeBlock: function (node) { return node.attrs.language === "mermaid" ? diagramView(node) : codeView(node); } } },
+        })];
+      },
+    });
+  }
+
   function commentHighlightExtension(T) {
     var key = new T.PluginKey("lfgCommentHighlights");
     function build(doc, items) {
@@ -576,6 +627,7 @@
             T.TaskItem.configure({ nested: true }),
             T.Markdown,
             commentHighlightExtension(T),
+            diagramExtension(T),
           ],
           content: opts.markdown || "",
           contentType: "markdown",

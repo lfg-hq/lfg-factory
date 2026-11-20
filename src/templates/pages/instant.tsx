@@ -486,7 +486,7 @@ export function InstantPage({
   </script>
   <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js"></script>
+  <script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/instant.js?v=${Date.now()}"></script>
   <script></script>

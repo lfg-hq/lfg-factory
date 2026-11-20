@@ -28,6 +28,7 @@ export const documentComments = sqliteTable(
     content: text("content").notNull(),
     parentId: text("parent_id"), // null = top-level, set = reply
     isResolved: integer("is_resolved", { mode: "boolean" }).notNull().default(false),
+    byAgent: integer("by_agent", { mode: "boolean" }).notNull().default(false), // written by the agent on the user's behalf
     resolvedById: text("resolved_by_id").references(() => users.id, { onDelete: "set null" }),
     resolvedAt: integer("resolved_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

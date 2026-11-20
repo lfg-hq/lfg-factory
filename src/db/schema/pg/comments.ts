@@ -21,6 +21,7 @@ export const documentComments = pgTable(
     content: text("content").notNull(),
     parentId: text("parent_id"),
     isResolved: boolean("is_resolved").notNull().default(false),
+    byAgent: boolean("by_agent").notNull().default(false), // written by the agent on the user's behalf
     resolvedById: text("resolved_by_id").references(() => users.id, { onDelete: "set null" }),
     resolvedAt: timestamp("resolved_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),

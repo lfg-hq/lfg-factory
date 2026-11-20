@@ -256,7 +256,8 @@ export const getDocumentComments = tool({
   description:
     "Read the comments people left on a project document: the quoted passage each comment is about, " +
     "who wrote it, when, replies, and whether it's resolved. Use it when asked about feedback or comments " +
-    "on a document, or before revising a document that has open comments.",
+    "on a document, or before revising a document that has open comments. After revising for a comment, answer it with " +
+    "replyToDocumentComment (and resolve it when the change settles it).",
   inputSchema: zodSchema(z.object({
     fileId: z.string(),
     includeResolved: z.boolean().optional().describe("Also return resolved comments (default false)"),

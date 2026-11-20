@@ -182,7 +182,10 @@
             const previous = pending.get(code);
             if (previous && previous.text === text && !(previous.failed && previous.tries < 3 && Date.now() >= previous.retryAt)) return previous.job;
             const tries = previous && previous.text === text ? previous.tries + 1 : 1;
-            if (code.closest('[contenteditable="true"], .codex-editor, .lfg-diagram, [data-streaming="true"], .orchestrator-streaming')) return;
+            // Skip blocks someone is typing in. A diagram block inside the document editor is
+            // its own non-editable island (contenteditable=false), so it is drawn.
+            if (code.closest('[contenteditable]')?.getAttribute('contenteditable') === 'true') return;
+            if (code.closest('.codex-editor, .lfg-diagram, [data-streaming="true"], .orchestrator-streaming')) return;
             const job = (async () => {
                 const pre = code.parentElement;
                 if (pre.dataset.diagramError) {

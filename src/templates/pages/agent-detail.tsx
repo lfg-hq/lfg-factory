@@ -514,7 +514,7 @@ export function AgentDetailPage({
     window.__AGENT_MODE__ = true;
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js"></script>
+  <script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
   <script src="/public/js/sidebar.js?v=20261118-peek"></script>
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
   <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>

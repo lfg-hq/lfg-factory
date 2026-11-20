@@ -30,6 +30,7 @@ export async function buildMcpTools(grant: TurnGrant): Promise<Record<string, an
   if (grant.projectId) {
     const [project] = await db.select({ publicId: projects.projectId }).from(projects).where(eq(projects.id, grant.projectId)).limit(1);
     Object.assign(tools, (await import("./tools/note-tools.ts")).noteTools({ projectId: grant.projectId, userId: grant.userId }));
+    Object.assign(tools, (await import("./tools/comment-tools.ts")).commentTools({ projectId: grant.projectId, userId: grant.userId }));
     if (project) tools.linkTicketDocuments = linkTicketDocumentsTool({ projectId: grant.projectId, publicProjectId: project.publicId, userId: grant.userId });
     if (project) Object.assign(tools, await previewTools(grant, project.publicId));
   }

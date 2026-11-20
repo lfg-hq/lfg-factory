@@ -8585,7 +8585,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     </div>
                                                     <div class="version-item-info">
                                                         <span class="version-number">Version ${version.versionNumber}</span>
-                                                        ${version.createdById ? `<span class="version-author">${version.createdById}</span>` : ''}
+                                                        ${version.createdByName ? `<span class="version-author">${String(version.createdByName).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}</span>` : ''}
                                                     </div>
                                                     ${version.changeDescription ?
                                                         `<div class="version-description">${version.changeDescription}</div>` : ''}
@@ -8691,8 +8691,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             right: -400px;
                             width: 400px;
                             height: 100%;
-                            background: #1a1a1a;
-                            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+                            background: var(--background-elevated, #1a1a1a);
+                            color: var(--text-primary, #e2e8f0);
+                            border-left: 1px solid var(--border-color, #333);
+                            box-shadow: -8px 0 24px rgba(0,0,0,0.18);
                             z-index: 2050;
                             display: flex;
                             flex-direction: column;
@@ -8708,15 +8710,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             align-items: center;
                             justify-content: space-between;
                             padding: 1rem 1.5rem;
-                            border-bottom: 1px solid #333;
-                            background: #0a0a0a;
+                            border-bottom: 1px solid var(--border-color, #333);
+                            background: var(--background-elevated, #0a0a0a);
                         }
                         
                         .version-drawer-header h5 {
                             margin: 0;
                             font-size: 1.1rem;
                             font-weight: 600;
-                            color: #e2e8f0;
+                            color: var(--text-primary, #e2e8f0);
                         }
                         
                         .version-drawer-subheader {
@@ -8724,19 +8726,21 @@ document.addEventListener('DOMContentLoaded', function() {
                             align-items: center;
                             justify-content: space-between;
                             padding: 0.75rem 1.5rem;
-                            border-bottom: 1px solid #333;
-                            background: #1a1a1a;
+                            border-bottom: 1px solid var(--border-color, #333);
+                            background: var(--background-elevated, #1a1a1a);
                         }
                         
                         .version-drawer-subheader .file-name {
                             font-weight: 500;
-                            color: #94a3b8;
+                            color: var(--text-secondary, #94a3b8);
                             font-size: 0.9rem;
+                            min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                         }
                         
                         .version-drawer-subheader .version-count {
                             font-size: 0.85rem;
-                            color: #64748b;
+                            color: var(--text-muted, #64748b);
+                            flex: none; margin-left: 12px;
                         }
                         
                         .version-drawer-content {
@@ -8752,7 +8756,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         .version-date-label {
                             font-size: 0.75rem;
                             font-weight: 600;
-                            color: #64748b;
+                            color: var(--text-muted, #64748b);
                             text-transform: uppercase;
                             letter-spacing: 0.5px;
                             padding: 0 1.5rem;
@@ -8770,16 +8774,16 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         
                         .version-item:hover {
-                            background-color: #262626;
+                            background-color: rgba(127,127,127,0.08);
                         }
                         
                         .version-item.selected {
-                            background-color: #1e293b;
-                            border-left-color: #3b82f6;
+                            background-color: var(--tint-bg, rgba(139,120,240,.12));
+                            border-left-color: var(--primary-color, #8b5cf6);
                         }
                         
                         .version-item.current-version {
-                            background-color: #1e1e2e;
+                            background-color: var(--tint-bg, rgba(139,120,240,.12));
                         }
                         
                         .version-item-content {
@@ -8797,14 +8801,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         .version-time {
                             font-size: 0.875rem;
                             font-weight: 500;
-                            color: #e2e8f0;
+                            color: var(--text-primary, #e2e8f0);
                         }
                         
                         .current-badge {
                             font-size: 0.7rem;
                             font-weight: 600;
-                            color: #3b82f6;
-                            background: #1e293b;
+                            color: var(--primary-color, #8b5cf6);
+                            background: var(--tint-bg, rgba(139,120,240,.12));
                             padding: 0.125rem 0.5rem;
                             border-radius: 10px;
                             text-transform: uppercase;
@@ -8815,7 +8819,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             align-items: center;
                             gap: 0.5rem;
                             font-size: 0.8rem;
-                            color: #94a3b8;
+                            color: var(--text-secondary, #94a3b8);
                         }
                         
                         .version-number {
@@ -8829,7 +8833,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         .version-description {
                             font-size: 0.8rem;
-                            color: #64748b;
+                            color: var(--text-muted, #64748b);
                             margin-top: 0.25rem;
                             white-space: nowrap;
                             overflow: hidden;
@@ -8850,20 +8854,20 @@ document.addEventListener('DOMContentLoaded', function() {
                         .btn-ghost {
                             background: transparent;
                             border: none;
-                            color: #64748b;
+                            color: var(--text-secondary, #64748b);
                             padding: 0.25rem 0.5rem;
                             border-radius: 4px;
                             transition: all 0.2s ease;
                         }
                         
                         .btn-ghost:hover {
-                            background: #334155;
-                            color: #94a3b8;
+                            background: rgba(127,127,127,0.14);
+                            color: var(--text-primary, #e2e8f0);
                         }
                         
                         .no-versions {
                             text-align: center;
-                            color: #64748b;
+                            color: var(--text-muted, #64748b);
                             padding: 2rem;
                         }
                         
@@ -8874,7 +8878,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             left: 0;
                             right: 0;
                             bottom: 0;
-                            background: rgba(0, 0, 0, 0.5);
+                            background: var(--background-overlay, rgba(0, 0, 0, 0.5));
                             z-index: 2049;
                             opacity: 0;
                             visibility: hidden;
