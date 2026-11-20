@@ -10,19 +10,19 @@ export function restartWorktree(porcelain: string, branch: string | null, mainDi
   }));
   const dedicated = branch && branch !== "(default)" ? entries.find(e => !e.prunable && e.dir === previewCheckoutDir(branch)) : undefined;
   const match = dedicated || entries.find(e => !e.prunable && (branch && branch !== "(default)" ? e.branch === branch : e.dir === mainDir));
-  if (!match?.dir) throw new Error("The prepared checkout is missing. Use Update & rebuild to prepare the selected branch again.");
+  if (!match?.dir) throw new Error("The prepared checkout is missing. Press Restart in Preview to prepare the selected branch again.");
   return match.dir;
 }
 
 /** Launch only the saved server command. No dependency, build or database steps. */
 export function restartServerCommand(dir: string, port: number, command: string, environment: string, logName = "preview.log", exitFile = `${dir}/${logName}.exit`): string {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid preview port");
-  if (!command.trim()) throw new Error("No saved start command. Use Update & rebuild first.");
+  if (!command.trim()) throw new Error("No saved start command. Press Restart in Preview first.");
   const log = `${dir}/${logName}`;
   const child = `${environment} cd ${shellQuote(dir)} || exit 1; ${command}`;
   const wrapper = `sh -c ${shellQuote(child)}; code=$?; echo "$code" > ${shellQuote(exitFile)}; exit "$code"`;
   return `test -e ${shellQuote(dir + "/.git")} || { echo 'Prepared checkout is missing'; exit 1; }
-command -v setsid >/dev/null && command -v fuser >/dev/null && command -v curl >/dev/null || { echo 'Runtime tools are missing; use Update & rebuild'; exit 1; }
+command -v setsid >/dev/null && command -v fuser >/dev/null && command -v curl >/dev/null || { echo 'Runtime tools are missing; press Restart in Preview'; exit 1; }
 fuser -k ${port}/tcp 2>/dev/null || true
 for attempt in 1 2 3; do
   fuser ${port}/tcp >/dev/null 2>&1 || break
@@ -47,7 +47,7 @@ export async function waitForRestart(deps: {
     if (deps.cancelled()) throw new Error("__CANCELLED__");
     const state = await deps.probe();
     if (deps.cancelled()) throw new Error("__CANCELLED__");
-    if (state.exited) throw new Error("The saved start command exited. Check App logs; use Update & rebuild if dependencies or build files are missing.");
+    if (state.exited) throw new Error("The saved start command exited. Check App logs; press Restart in Preview if dependencies or build files are missing.");
     if (state.code >= 200 && state.code < 500) return;
     if (state.code >= 500) throw new Error(`The app started but returned HTTP ${state.code}. Check App logs for the application error.`);
     deps.progress(Math.round((deps.now() - start) / 1000));

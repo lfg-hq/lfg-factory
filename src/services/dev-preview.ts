@@ -255,7 +255,7 @@ export async function recoverInterruptedPreviews(quietMs = 2 * 60_000): Promise<
   for (const row of rows) {
     if (previewRunQueue.isActive(row.projectId) || Date.now() - new Date(row.updatedAt ?? 0).getTime() < quietMs) continue;
     await db.update(projectEnvironments)
-      .set({ previewStatus: "error", previewError: "Preview setup was interrupted by a server restart. Press Update & rebuild to start it again.", updatedAt: new Date() })
+      .set({ previewStatus: "error", previewError: "Preview setup was interrupted by a server restart. Press Restart in Preview to start it again.", updatedAt: new Date() })
       .where(and(eq(projectEnvironments.projectId, row.projectId), inArray(projectEnvironments.previewStatus, BUSY_PREVIEW)));
     recovered++;
   }
@@ -3690,9 +3690,9 @@ export async function restartPreviewApp(projectId: string, opts: Pick<SetupOptio
     const sandbox = await ensureProjectSandbox(projectId);
     workspaceId = sandbox.workspaceId;
     throwIfCancelled(projectId);
-    if (sandbox.created || sandbox.recreated) throw new Error("The sandbox had to be recreated. Use Update & rebuild to restore its runtime and start this branch.");
+    if (sandbox.created || sandbox.recreated) throw new Error("The sandbox had to be recreated. Press Restart in Preview to restore its runtime and start this branch.");
     const trees = await sh(workspaceId, `git -C ${PROJECT_DIR} worktree list --porcelain`, 15_000);
-    if (trees.exitCode !== 0) throw new Error("The prepared checkout is unavailable. Use Update & rebuild to prepare this branch.");
+    if (trees.exitCode !== 0) throw new Error("The prepared checkout is unavailable. Press Restart in Preview to prepare this branch.");
     const dir = restartWorktree(trees.output, row.previewBranch);
     workerDir=dir;
     await resolvePreviewWorkers(projectId,workspaceId,manifest,dir);
@@ -3708,7 +3708,7 @@ export async function restartPreviewApp(projectId: string, opts: Pick<SetupOptio
     // runtime repairs. With a baseline, only actual user edits override repairs.
     const legacyProtected = new Set([...databaseKeys, ...(profile?.environmentOverrides || []).map(e => e.key)]);
     if (previous && changedKeys.some(key => databaseKeys.has(key))) {
-      throw new Error("Database connection settings changed. Use Update & rebuild to apply them and check the database connection.");
+      throw new Error("Database connection settings changed. Press Restart in Preview to apply them and check the database connection.");
     }
     const patches = Object.fromEntries(changedKeys.filter(key => previous || !legacyProtected.has(key)).map(key => [key, savedValues[key] ?? null]));
     const buildNeeded = opts.rebuildApp === true || !!profile?.pendingProjectEnvironment?.requiresBuild || requiresEnvironmentBuild(changedKeys, profile?.buildEnvironmentKeys);
@@ -3717,9 +3717,9 @@ export async function restartPreviewApp(projectId: string, opts: Pick<SetupOptio
       ...(manifest.services || []).filter(s => !s.primary && s.enabled && s.buildCmd).map(s => ({ name: s.name, command: s.buildCmd!, dir: s.dir || "" })),
     ];
     if (buildNeeded && !builds.length && !/\b(dev|vite|watch)\b/.test(row.runCommand)) {
-      throw new Error("These environment changes require a build, but no build command is saved. Use Update & rebuild to prepare the app.");
+      throw new Error("These environment changes require a build, but no build command is saved. Press Restart in Preview to prepare the app.");
     }
-    if (!profile) throw new Error("The saved runtime profile is missing. Use Update & rebuild to prepare this branch.");
+    if (!profile) throw new Error("The saved runtime profile is missing. Press Restart in Preview to prepare this branch.");
     if (previous) {
       profile.environmentOverrides = (profile.environmentOverrides || []).filter(v => !changedKeys.includes(v.key));
     }

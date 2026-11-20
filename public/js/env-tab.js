@@ -65,7 +65,7 @@
     el.replaceChildren();
     const text = document.createElement("p");
     text.textContent = busy ? "Preview is updating…" : application.requiresPreparation
-      ? "Database settings changed. Use Update & rebuild in Preview to apply them." : application.status === "error" && pending
+      ? "Database settings changed. Restart the preview to apply them." : application.status === "error" && pending
       ? "Changes are still pending. Check Preview for the error, then retry." : pending
       ? "Changes pending · " + (application.requiresBuild ? "A build and restart are needed." : "Restart to apply saved settings.")
       : application.appliedAt ? "Saved settings applied to this preview." : "Settings will be applied when the preview starts.";

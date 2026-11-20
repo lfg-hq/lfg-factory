@@ -231,7 +231,7 @@
       (onComputer() ? "" : btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" })) +
       btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
       tbDiv() +
-      btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "More — Env Profile, Restart, Stop" })
+      btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "Restart, stop and more" })
     );
   }
 
@@ -502,6 +502,7 @@
         <div id="pv-frames" style="flex:1;position:relative;background:#fff;"></div>
       </div>`;
     renderTabs(); renderFrames(); syncAddr();
+    if (onComputer() && !isDesktopApp) watchLocalAccess(previewUrl);
     const strip = document.getElementById("pv-tabstrip");
     const addr = document.getElementById("pv-addr");
     document.querySelectorAll("[data-bx]").forEach((el) => el.addEventListener("click", () => bxAction(el.getAttribute("data-bx"))));
@@ -574,6 +575,52 @@
       </div>`;
     }).join("") + `<button data-newtab="1" title="New tab" style="${navBtn()}margin-left:4px;"><i class="fas fa-plus"></i></button>`;
   }
+  // Chrome blocks a public site from showing pages served by this computer unless the
+  // person allows "Local network access" for it. The frame then shows Chrome's own
+  // "connection is blocked" page, which explains nothing. Ask Chrome for the permission
+  // state and, when it is blocked, say so plainly and offer the ways out.
+  const LOCAL_ACCESS_NAMES = ["loopback-network", "local-network-access", "local-network"];
+  async function localAccessStatus() {
+    if (!navigator.permissions || !navigator.permissions.query) return null;
+    for (const name of LOCAL_ACCESS_NAMES) {
+      try { return await navigator.permissions.query({ name }); } catch (_) { /* not this browser's name */ }
+    }
+    return null;
+  }
+  function isLocalUrl(u) {
+    try { const h = new URL(u).hostname; return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h.endsWith(".localhost"); } catch (_) { return false; }
+  }
+  async function watchLocalAccess(previewUrl) {
+    if (location.protocol !== "https:" || !isLocalUrl(previewUrl)) return;
+    const status = await localAccessStatus();
+    if (!status) return;
+    const apply = () => {
+      const frames = document.getElementById("pv-frames");
+      if (!frames) return;
+      const old = document.getElementById("pv-local-blocked");
+      if (status.state !== "denied") {
+        if (old) { old.remove(); Array.from(frames.querySelectorAll("iframe")).forEach((f) => { f.src = f.src; }); }
+        return;
+      }
+      if (old) return;
+      const note = document.createElement("div");
+      note.id = "pv-local-blocked";
+      note.style.cssText = "position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg-color,#0f0f0f);color:var(--text-color,#e2e8f0);";
+      note.innerHTML = `<div style="max-width:440px;display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:1.55;">
+          <div style="font-size:15px;font-weight:600;">Chrome is blocking this preview here</div>
+          <div style="color:var(--text-secondary,#94a3b8);">Your app is running on your computer, but Chrome stops a website from showing pages served by your own computer unless you allow it.</div>
+          <div style="color:var(--text-secondary,#94a3b8);">To see it in this panel, click the site icon to the left of the address bar, turn on <b style="color:var(--text-color,#e2e8f0);">Local network access</b>, and reload. Or open it in its own tab, which always works.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+            <button data-bx="external" style="padding:8px 14px;border-radius:7px;border:none;background:var(--primary-color,#7c3aed);color:#fff;cursor:pointer;font-size:12.5px;">Open in new tab</button>
+            <button data-action="usecloud" style="padding:8px 14px;border-radius:7px;border:1px solid var(--border-color,#333);background:transparent;color:var(--text-color,#e2e8f0);cursor:pointer;font-size:12.5px;">Run in the cloud instead</button>
+          </div>
+        </div>`;
+      note.querySelector("[data-bx]").addEventListener("click", () => bxAction("external"));
+      frames.appendChild(note);
+    };
+    apply();
+    status.onchange = apply;
+  }
   function renderFrames() {
     const frames = document.getElementById("pv-frames");
     if (!frames) return;
@@ -584,7 +631,9 @@
         f = document.createElement("iframe");
         f.id = `pv-frame-${t.id}`;
         f.src = frameSrc(t.url);
-        f.setAttribute("allow", "clipboard-read; clipboard-write");
+        // Chrome's Local Network Access: a public page (lfg.run) may only frame an app on
+        // this computer (localhost) when it delegates the permission to the frame.
+        f.setAttribute("allow", "clipboard-read; clipboard-write; local-network-access; local-network; loopback-network");
         frames.appendChild(f);
       }
     }
@@ -750,7 +799,7 @@
       const eActions = () => (branches.length > 1
         ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${branchOptions()}</select>`
         : "")
-        + btn("Update & rebuild", { action: "refreshbranch", primary: true, icon: "fa-rotate" })
+        + btn("Restart", { action: "refreshbranch", primary: true, icon: "fa-rotate" })
         + btn("Run default branch", { action: "rundefault", icon: "fa-house" })
         + (state.where === "computer" ? "" : btn("Re-setup", { action: "setup", icon: "fa-rotate" }));
       renderActions(eActions());
@@ -864,18 +913,24 @@
   }
 
   // Toggle a log overlay on top of the running iframe.
-  // ⋮ overflow menu (Env Profile / Restart / Stop) anchored under the "More" button.
+  // ⋮ overflow menu (Restart / Stop / troubleshooting) anchored under the "More" button.
   function togglePrevMenu(anchor) {
     const existing = document.getElementById("preview-more-menu");
     if (existing) { existing.remove(); return; }
     const m = document.createElement("div");
     m.id = "preview-more-menu";
     m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
-    const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
+    const item = (label, act, icon, danger, hint) => `<button data-menu="${act}" style="text-align:left;padding:8px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "var(--error-color,#f87171)" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i><span style="display:flex;flex-direction:column;gap:1px;">${label}${hint ? `<span style="font-size:11px;color:var(--text-secondary,#94a3b8);">${hint}</span>` : ""}</span></button>`;
+    const sep = `<div style="height:1px;margin:4px 6px;background:var(--border-color,#333);"></div>`;
     m.innerHTML = onComputer()
-      ? item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Run in the cloud instead", "usecloud", "fa-cloud") + item("Stop", "stop", "fa-stop", true)
-      : item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Clean build", "cleanbuild", "fa-hammer") + item("Rebuild sandbox", "rebuildvm", "fa-server")
-        + (current && current.computerAvailable ? item("Run on my computer", "usecomputer", "fa-laptop") : "") + item("Stop", "stop", "fa-stop", true);
+      // One Restart: it always gets the branch's latest code and re-applies the project's
+      // environment variables, so there is no separate "update" or "apply env" step.
+      ? item("Restart", "refreshbranch", "fa-rotate", false, "Latest code, current settings") + item("Run in the cloud instead", "usecloud", "fa-cloud") + sep + item("Stop", "stop", "fa-stop", true)
+      : item("Restart", "refreshbranch", "fa-rotate", false, "Latest code, current settings")
+        + (current && current.computerAvailable ? item("Run on my computer", "usecomputer", "fa-laptop") : "")
+        + sep + item("Clean build", "cleanbuild", "fa-hammer", false, "Reinstall and rebuild from scratch") + item("Rebuild sandbox", "rebuildvm", "fa-server", false, "When Logs say \u201cNo VM found\u201d")
+        + item("App routes", "routes", "fa-diagram-project") + item("Run settings", "profile", "fa-list-check")
+        + sep + item("Stop", "stop", "fa-stop", true);
     document.body.appendChild(m);
     const r = anchor.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -885,7 +940,7 @@
     m.addEventListener("click", (e) => {
       const it = e.target.closest("[data-menu]"); if (!it) return;
       const a = it.getAttribute("data-menu"); m.remove();
-      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "refreshbranch") doRestart(true); else if (a === "cleanbuild") doRestart(true, true); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop(); else if (a === "usecloud") setWhere(true); else if (a === "usecomputer") setWhere(false);
+      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart" || a === "refreshbranch") doRestart(true); else if (a === "cleanbuild") doRestart(true, true); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop(); else if (a === "usecloud") setWhere(true); else if (a === "usecomputer") setWhere(false);
     });
     setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
   }
@@ -1134,7 +1189,7 @@
     const isEpic = !!(entry && String(entry.id || "").indexOf("epic:") === 0);
     const ticketId = !isEpic && branchId && branchId !== "default" ? (entry ? entry.ticketId : branchId) : null;
     const branch = isEpic ? entry.branch : null;
-    setSub(refresh ? "Updating and rebuilding the selected branch…" : "Restarting the current app…");
+    setSub(refresh ? "Getting the latest code, applying your environment variables and restarting…" : "Restarting the current app…");
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
@@ -1265,7 +1320,7 @@
     }
     else if (action === "prevmenu") togglePrevMenu(b);
     else if (action === "profile") togglePlan();
-    else if (action === "restart") doRestart();
+    else if (action === "restart") doRestart(true);
     else if (action === "refreshbranch") doRestart(true);
     else if (action === "rundefault") doRunBranch("default");
     else if (action === "stop") doStop();
