@@ -91,9 +91,19 @@ export function registerEventHandlers(): void {
     if (!projectId) return;
     const name = await getTicketName(ticketId);
 
+    // A single ticket merged into its epic: restart the epic's preview with the new code,
+    // and say so in the build message, so nobody is left testing the old version.
+    const { epicPreviewTarget, refreshEpicPreview } = await import("../services/epic-auto-preview.ts");
+    const previewTarget = status === "complete" && exitCode !== 130
+      ? await epicPreviewTarget(ticketId).catch(() => null) : null;
+    if (previewTarget) refreshEpicPreview(previewTarget);
+
     await reportBuildStatus(ticketId, exitCode === 130 ? "stopped" : status,
       exitCode === 130 ? "Build stopped." : status === "complete"
-        ? "Build finished, ready for review." : "Build didn’t finish. Ask me here what went wrong, or open the ticket’s Actions tab for the full log.");
+        ? (previewTarget
+          ? `Build finished, ready for review. Merged into \`${previewTarget.branch}\`; the preview is restarting there with the new code, and I'll post the link when it's up.`
+          : "Build finished, ready for review.")
+        : "Build didn’t finish. Ask me here what went wrong, or open the ticket’s Actions tab for the full log.");
 
     if (status === "complete") {
       const durationStr = durationMs ? ` in ${Math.round(durationMs / 1000)}s` : "";
