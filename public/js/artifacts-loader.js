@@ -2208,7 +2208,7 @@ document.addEventListener('DOMContentLoaded', function() {
             ticketsTab.innerHTML = '<div class="loading-state"><div class="spinner"></div><div>Loading tickets...</div></div>';
 
             const previous = append && this._ticketPage?.projectId === projectId ? this._ticketPage : null;
-            const url = `/projects/${projectId}/api/checklist/?limit=20&offset=${previous?.nextOffset || 0}`;
+            const url = `/projects/${projectId}/api/checklist/?limit=200&offset=${previous?.nextOffset || 0}`;
 
             fetch(url)
                 .then(response => {
@@ -2451,9 +2451,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     renderTickets();
                     if (data.hasMore) {
                         const more = document.createElement('button'); more.type = 'button'; more.className = 'btn btn-secondary';
-                        more.textContent = `Load 20 more (${tickets.length} loaded; filters apply to loaded tickets)`;
+                        more.textContent = 'Show older tickets';
+                        more.style.margin = '12px auto 20px'; more.style.display = 'block';
                         more.onclick = () => { more.disabled = true; this.loadTickets(projectId, true); };
-                        ticketsTab.prepend(more);
+                        ticketsTab.append(more);
                     }
                 })
                 .catch(error => {
@@ -2713,7 +2714,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const previous = append && this._checklistPage?.projectId === projectId ? this._checklistPage : null;
             const offset = previous?.nextOffset || 0;
             const requestId = this._checklistRequestId = (this._checklistRequestId || 0) + 1;
-            const checklistUrl = `/projects/${projectId}/api/checklist/?limit=20&offset=${offset}`;
+            const checklistUrl = `/projects/${projectId}/api/checklist/?limit=200&offset=${offset}`;
             
             fetch(checklistUrl)
                 .then(response => {
@@ -2980,27 +2981,27 @@ document.addEventListener('DOMContentLoaded', function() {
                                         <div class="filter-options">
                                             <div class="filter-group">
                                                 <select id="status-filter" class="checklist-filter-dropdown">
-                                                    <option value="all">All Statuses</option>
+                                                    <option value="all">Any status</option>
                                                     ${statuses.map(status => `<option value="${status}">${status.replace('_', ' ').charAt(0).toUpperCase() + status.replace('_', ' ').slice(1)}</option>`).join('')}
                                                 </select>
                                                 <select id="role-filter" class="checklist-filter-dropdown">
-                                                    <option value="all">All Assigned</option>
+                                                    <option value="all">Anyone</option>
                                                     ${roles.map(role => `<option value="${role}">${role.charAt(0).toUpperCase() + role.slice(1)}</option>`).join('')}
                                                 </select>
                                                 ${sourceDocuments.length > 0 ? `
                                                 <select id="file-filter" class="checklist-filter-dropdown">
-                                                    <option value="all">All Files</option>
+                                                    <option value="all">Any document</option>
                                                     ${sourceDocuments.map(doc => `<option value="${doc.id}">${doc.name}</option>`).join('')}
                                                 </select>
                                                 ` : ''}
                                                 ${currentConversationId ? `
                                                 <select id="conversation-filter" class="checklist-filter-dropdown">
-                                                    <option value="all">All Tickets</option>
-                                                    <option value="current">This Chat Only</option>
+                                                    <option value="all">All chats</option>
+                                                    <option value="current">This chat</option>
                                                 </select>
                                                 ` : ''}
                                                 <select id="epic-filter" class="checklist-filter-dropdown" title="Filter by epic">
-                                                    <option value="all">All Epics</option>
+                                                    <option value="all">All epics</option>
                                                     ${epicOptions.map(e => `<option value="${e.id}">${e.label}</option>`).join('')}
                                                     <option value="__none__">No epic</option>
                                                 </select>
@@ -3080,14 +3081,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     checklistTab.innerHTML = checklistHTML;
                     window.TicketMap?.mount(projectId, checklistTab);
                     if (data.hasMore) {
+                        // Paging lives at the END of the list, where you run out of
+                        // tickets — not as a banner over the filters.
                         const paging = document.createElement('div');
-                        paging.style.cssText = 'padding:12px;display:flex;align-items:center;gap:12px;color:var(--text-secondary);font-size:12px';
-                        const hint = document.createElement('span');
-                        hint.textContent = `${checklist.length} tickets loaded. Filters apply to loaded tickets.`;
+                        paging.className = 'checklist-more';
+                        paging.style.cssText = 'padding:12px 16px 20px;display:flex;justify-content:center';
                         const more = document.createElement('button');
-                        more.type = 'button'; more.className = 'btn btn-secondary'; more.textContent = 'Load 20 more';
+                        more.type = 'button'; more.className = 'btn btn-secondary'; more.textContent = 'Show older tickets';
                         more.onclick = () => { more.disabled = true; more.textContent = 'Loading…'; this.loadChecklist(projectId, true); };
-                        paging.append(hint, more); checklistTab.prepend(paging);
+                        paging.append(more);
+                        (checklistTab.querySelector('.checklist-wrapper') || checklistTab).append(paging);
                     }
 
                     // Get filter elements and content container
@@ -7126,13 +7129,24 @@ document.addEventListener('DOMContentLoaded', function() {
                             return (e.epicKey ? e.epicKey + ' · ' : '') + e.epicName;
                         };
                         const isDesign = f => f.type === 'page_preview';
+                        // Newest first, everywhere. Docs not linked to any epic sit at the
+                        // top level, not in an "Unassigned" folder; epic groups follow,
+                        // ordered by their newest document.
+                        const docTime = f => new Date(f.updated_at || f.created_at || 0).getTime() || 0;
+                        const groupKey = f => (isDesign(f) ? 'design:' : '') + (((currentEpic && currentEpic !== '__none__'
+                            ? (f.epics || []).find(e => e.epicId === currentEpic) : null) || (f.epics || [])[0])?.epicId || '__none__');
+                        const groupNewest = new Map();
+                        for (const f of data.files) {
+                            const k = groupKey(f);
+                            groupNewest.set(k, Math.max(groupNewest.get(k) || 0, docTime(f)));
+                        }
+                        const isLoose = f => !isDesign(f) && !(f.epics && f.epics.length);
                         data.files.sort((a, b) => {
                             if (isDesign(a) !== isDesign(b)) return isDesign(a) ? 1 : -1;
-                            const al = docEpicLabel(a), bl = docEpicLabel(b);
-                            if (al === bl) return 0;
-                            if (al === 'No epic') return 1;
-                            if (bl === 'No epic') return -1;
-                            return (new Date(b.epics?.[0]?.epicCreatedAt || 0) - new Date(a.epics?.[0]?.epicCreatedAt || 0)) || bl.localeCompare(al, undefined, {numeric:true});
+                            if (isLoose(a) !== isLoose(b)) return isLoose(a) ? -1 : 1;
+                            const ak = groupKey(a), bk = groupKey(b);
+                            if (ak !== bk) return (groupNewest.get(bk) - groupNewest.get(ak)) || docEpicLabel(b).localeCompare(docEpicLabel(a), undefined, {numeric:true});
+                            return docTime(b) - docTime(a);
                         });
                         const folderHeader = (title, keyText, count, isEpic = false) => {
                             const header = document.createElement('summary');
@@ -7208,7 +7222,17 @@ document.addEventListener('DOMContentLoaded', function() {
                             const epic = (currentEpic && currentEpic !== '__none__'
                                 ? file.epics?.find(e => e.epicId === currentEpic) : null) || file.epics?.[0];
                             const groupId = (isDesign(file) ? 'design:' : '') + (epic?.epicId || '__none__');
-                            if (groupId !== curDocGroup) {
+                            if (isLoose(file)) {
+                                // Top level, no folder: reuse one plain container so the
+                                // rows sit flush with the epic group headers.
+                                if (curDocGroup !== '__loose__') {
+                                    curDocGroup = '__loose__';
+                                    groupBody = document.createElement('div');
+                                    groupBody.className = 'document-loose-files';
+                                    fileBrowserList.appendChild(groupBody);
+                                    groupCount = null;
+                                }
+                            } else if (groupId !== curDocGroup) {
                                 curDocGroup = groupId;
                                 groupSize = 0;
                                 const group = document.createElement('details');
@@ -7226,8 +7250,10 @@ document.addEventListener('DOMContentLoaded', function() {
                                 group.append(hdr, groupBody);
                                 (isDesign(file) ? designFolder : fileBrowserList).appendChild(group);
                             }
-                            groupCount.textContent = String(++groupSize);
-                            groupCount.setAttribute('aria-label', groupSize + ' documents on this page');
+                            if (groupCount) {
+                                groupCount.textContent = String(++groupSize);
+                                groupCount.setAttribute('aria-label', groupSize + ' documents on this page');
+                            }
                             const icon = getFileIcon(file.type);
                             const typeClass = `file-type-${file.type}`;
                             
@@ -7546,7 +7572,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const label = (e.epicKey ? e.epicKey + ' · ' : '') + e.name;
                     html += `<option value="${e.id}">${label}</option>`;
                 });
-                html += '<option value="__none__">Unassigned</option>';
+                html += '<option value="__none__">Not in an epic</option>';
                 fileEpicFilter.innerHTML = html;
                 fileEpicFilter.value = prev || '';
                 let targets = document.getElementById('doc-epic-drop-targets');

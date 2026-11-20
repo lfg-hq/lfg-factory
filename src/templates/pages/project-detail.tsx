@@ -142,7 +142,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
   <link rel="stylesheet" href="/public/css/project-home.css?v=20261116-calls" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261118-no-shadow" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-loose-docs" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css?v=20261118-ink" />
@@ -1132,7 +1132,7 @@ export function ProjectDetailPage({
           <script src="/public/js/design-preview.js"></script>
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261121-diagrams"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261121-panel-lists"></script>
           <script src="/public/js/document-comments.js?v=20261121-diagrams"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),

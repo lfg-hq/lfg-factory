@@ -4967,6 +4967,8 @@ body.ticket-modal-open {
 #filebrowser .document-design-folder > .document-epic-group { margin-left:17px; padding-left:12px; border-left:1px solid var(--border-color, #e2e8f0); }
 #filebrowser .document-group-files { margin-left:24px; padding-left:10px; border-left:1px solid var(--border-color, #e2e8f0); }
 #filebrowser .document-group-files .file-list-item { padding-left:8px; }
+#filebrowser .document-loose-files { margin:0 0 6px; }
+#filebrowser .document-loose-files .file-list-item { padding-left:10px; }
 
 #filebrowser .document-uploads-folder { min-width:0; margin:0 0 4px; }
 #filebrowser .document-group-epic { stroke:var(--primary-color, #8b5cf6); }
