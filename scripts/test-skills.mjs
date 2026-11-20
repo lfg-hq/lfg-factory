@@ -72,6 +72,25 @@ for (const [label, re] of rules) {
   else fail(label);
 }
 
+console.log("\nthe business-writing skill:");
+const bw = getSkill("business-writing");
+if (bw && cat.includes("business-writing") && /NOT for PRDs/.test(bw.description)) ok("it is listed and says what it is not for");
+else fail("business-writing missing from the catalogue or vague");
+const bwRules = [
+  ["it separates product docs from business writing", /Product doc or business writing\?/],
+  ["it looks up the evidence before asking", /First look it up yourself/],
+  ["it asks for reader, purpose and evidence before drafting", /Call `askUser` \*\*before drafting\*\*/],
+  ["it does not ask when the brief is already given", /Do not ask when the user already gave the reader and the purpose/],
+  ["it never borrows another product's results", /Never borrow results from another product/],
+  ["an empty section is cut, not filled", /No section without evidence/],
+  ["it recommends a pilot proposal when nothing is measured", /Pilot proposal/],
+  ["it rereads the draft as the reader", /Reader pass before you hand it over/],
+];
+for (const [label, re] of bwRules) {
+  if (bw && re.test(bw.body)) ok(label);
+  else fail(label);
+}
+
 console.log("\nno server-side guessing left:");
 const handler = fs.readFileSync("src/ai/stream-handler.ts", "utf8");
 if (!/skillsFor\(/.test(handler)) ok("the server no longer appends skills by keyword");

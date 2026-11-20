@@ -58,7 +58,7 @@ export function normalizeAskUserQuestions(input: unknown): Array<{
 
 export const askUser = tool({
   description:
-    "Ask the user one or more clarifying questions with suggested options. Each question becomes a section with checkboxes in an inline card. Whenever you need the user to answer or choose something, call this instead of writing the questions in your reply: write your analysis first, then call askUser at the end of the turn. Ask only questions that change what you do next (scope, users, provider, architecture), not routine details. Group related questions into one call (up to 4 sections).",
+    "Ask the user one or more clarifying questions with suggested options. Each question becomes a section with checkboxes in an inline card. Whenever you need the user to answer or choose something, call this instead of writing the questions in your reply: write your analysis first, then call askUser at the end of the turn. Ask only questions that change what you do next (scope, users, provider, architecture; for writing meant for outside readers: who reads it, what it should get them to do, and what evidence exists), not routine details. Group related questions into one call (up to 4 sections).",
   inputSchema: zodSchema(
     z.object({
       questions: z
