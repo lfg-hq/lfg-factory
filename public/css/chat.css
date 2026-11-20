@@ -3202,15 +3202,14 @@ input:checked + .turbo-slider + .turbo-label,
 @keyframes trail-dots { 0%,100% { opacity:.3; } 50% { opacity:1; } }
 @media (prefers-reduced-motion:reduce) { .agent-trail.is-running .agent-trail-spinner::before { animation:none; } }
 
-/* Assistant actions float below the bubble without reserving blank content space. */
-/* Reserve the toolbar's height OUTSIDE the card, including for the last message.
-   Absolute positioning alone lets the next user bubble cover the copy action. */
-.message.assistant:has(> .message-footer) { position:relative; margin-bottom:44px; }
+/* Assistant copy action sits in the free space just right of the card, level with its
+   last line: no blank band under every reply (the card is at most 92% wide). */
+.message.assistant:has(> .message-footer) { position:relative; }
 .message.assistant > .message-footer {
-  position:absolute; top:100%; right:0; left:0; margin-top:4px; padding:0 2px;
+  position:absolute; top:auto; bottom:0; left:100%; right:auto; margin:0 0 0 4px; padding:0;
 }
 .message.assistant > .message-footer::before {
-  content:""; position:absolute; left:0; right:0; top:-5px; height:5px;
+  content:""; position:absolute; top:0; bottom:0; left:-5px; width:5px;
 }
 .page-preview-body { overflow:hidden; }
 .page-preview-body iframe.page-preview-desktop {
@@ -3393,7 +3392,9 @@ input:checked + .turbo-slider + .turbo-label,
 .context-condense[data-state="done"] > i { color: var(--text-secondary, #94a3b8); }
 
 /* While dictating, the role/model label steps aside for the strip (its menu stays under Settings). */
-#chat-form:has(.audio-recording-indicator) .status-indicators { visibility:hidden; }
+#chat-form:has(.audio-recording-indicator) .status-indicators,
+#chat-form:has(.audio-recording-indicator) .local-usage-btn,
+#chat-form:has(.audio-recording-indicator) .local-usage-pop { visibility:hidden; }
 
 /* Dictation: a silent microphone is called out instead of hidden. */
 .audio-recording-indicator[data-phase="recording"][data-quiet="on"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:60%;font-size:12px;color:#b54708; }
