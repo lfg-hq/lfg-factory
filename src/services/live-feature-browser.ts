@@ -47,7 +47,9 @@ export class LiveFeatureBrowser {
     await this.state('working','App and public preview responded; starting browser');
     let storageState;
     if(input.authStatePath){if(!/^\/data\//.test(input.authStatePath))throw Error('Auth state must be in /data');const r=await this.o.shell('cat '+q(input.authStatePath));if(r.exitCode)throw Error('Cannot read test authentication');storageState=JSON.parse(r.output);}
-    const session=await startBrowserSession({timeout:90000});this.job=session.requestId;
+    const session=await startBrowserSession({timeout:90000,workspaceId:this.o.workspaceId});this.job=session.requestId;
+    // A browser inside the sandbox's network opens the app exactly where the agent runs it.
+    const browserBase=session.sharesWorkspaceNetwork?local.origin:base;
     const child=this.child=spawn('node',['scripts/feature-browser-worker.mjs'],{stdio:['pipe','pipe','pipe']});
     let buffer='',error='';let updates=Promise.resolve();
     let closed!:()=>void;this.closed=new Promise(resolve=>{closed=resolve;});
@@ -76,7 +78,7 @@ export class LiveFeatureBrowser {
     child.on('error',e=>{this.pending?.reject(e);this.pending=undefined;});
     child.on('close',()=>{void updates.then(async()=>{if(!this.result){clearTimeout(this.timer);await this.state('failed','Browser process ended: '+error);const video=await stat(this.dir+'/recording.mp4').then(s=>s.size>1000).catch(()=>false);await this.o.progress(`**Feature testing failed.** Browser process ended. ${this.o.redact(error)}${video?'\n\n[Watch recording]('+this.url+'/recording.mp4)':' No browser recording was captured.'}`);this.pending?.reject(Error('Browser process ended'));this.pending=undefined;}}).catch(e=>{this.pending?.reject(e);this.pending=undefined;}).finally(closed);});
     child.stdin.on('error',()=>{});
-    const ready=this.wait();child.stdin.write(JSON.stringify({interactive:true,wsEndpoint:session.wsEndpoint,base,outDir:this.dir,storageState})+'\n');const initialized=await ready;if(initialized.type!=='ready'){if(/certificate|local issuer|CERT_/i.test(initialized.failure||'')){const error=new Error('LFG browser connection unavailable: the recorder could not verify the Mags TLS certificate. Check the LFG server CA trust bundle and the Mags certificate chain. No browser frames were captured; sandbox commands cannot repair this server connection.');error.name='BrowserInfrastructureError';throw error;}throw Error(initialized.failure||'Browser could not start');}
+    const ready=this.wait();child.stdin.write(JSON.stringify({interactive:true,wsEndpoint:session.wsEndpoint,base:browserBase,outDir:this.dir,storageState})+'\n');const initialized=await ready;if(initialized.type!=='ready'){if(/certificate|local issuer|CERT_/i.test(initialized.failure||'')){const error=new Error('LFG browser connection unavailable: the recorder could not verify the Mags TLS certificate. Check the LFG server CA trust bundle and the Mags certificate chain. No browser frames were captured; sandbox commands cannot repair this server connection.');error.name='BrowserInfrastructureError';throw error;}throw Error(initialized.failure||'Browser could not start');}
     return this.command({action:'goto',path:local.pathname+local.search,label:'Open existing application'});
    }catch(e){if(!this.result)await this.state('failed',(e as Error).message).catch(()=>{});await this.close();throw e;}
   }

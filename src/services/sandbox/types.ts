@@ -60,6 +60,8 @@ export interface BrowserSession {
   requestId: string;
   wsEndpoint: string;
   cdpHttpUrl: string;
+  /** The browser shares the workspace's network: open the app at its in-sandbox localhost URL. */
+  sharesWorkspaceNetwork?: boolean;
 }
 
 export interface SandboxBackend {
@@ -76,7 +78,7 @@ export interface SandboxBackend {
   stopWorkspace(nameOrId: string): Promise<void>;
   /** Toggle auto-sleep at runtime (no-op on backends without a sleep concept). */
   setNoSleep(nameOrId: string, noSleep: boolean): Promise<void>;
-  startBrowserSession(opts?: { name?: string; timeout?: number; meet?: boolean }): Promise<BrowserSession>;
+  startBrowserSession(opts?: { name?: string; timeout?: number; meet?: boolean; workspaceId?: string }): Promise<BrowserSession>;
   deleteWorkspace(name: string): Promise<void>;
   getJobStatus(nameOrId: string): Promise<JobStatus>;
 }

@@ -24,6 +24,7 @@
 
 import { spawn } from "node:child_process";
 import { env } from "../../config/env.ts";
+import { closeDockerTunnels, dockerTunnel } from "./docker-tunnel.ts";
 import type {
   BrowserSession,
   JobInfo,
@@ -262,13 +263,10 @@ export async function findJob(nameOrId: string): Promise<JobInfo | null> {
 export async function enableHttpAccess(nameOrId: string, port = env.SANDBOX_APP_PORT): Promise<string> {
   let hostPort = port;
   if (!HOST_MODE) {
-    // Bridge mode: translate the app's internal port to the container's published
-    // host port. Fall back to APP_PORT's mapping, then to the requested port.
+    // Bridge mode: the published host port when this port was published at creation;
+    // otherwise a loopback tunnel. Never another port's mapping — that is a different app.
     const cname = containerName(nameOrId);
-    hostPort =
-      (await dockerHostPort(cname, port)) ??
-      (await dockerHostPort(cname, env.SANDBOX_APP_PORT)) ??
-      port;
+    hostPort = (await dockerHostPort(cname, port)) ?? (await dockerTunnel(cname, port));
   }
   const url = `${previewHostBase()}:${hostPort}`;
   _urlByWorkspace.set(baseName(nameOrId), url);
@@ -283,6 +281,12 @@ export async function setStableUrl(_subdomain: string, workspaceId: string, _por
 
 export async function stopWorkspace(nameOrId: string): Promise<void> {
   const cname = containerName(nameOrId);
+  await closeDockerTunnels(cname);
+  // Browser sessions are throwaway (a fresh one per test): remove, don't accumulate.
+  if (cname.startsWith(`${PREFIX}browser-`)) {
+    await runDocker(["rm", "-f", cname], { timeout: 30_000 }).catch(() => {});
+    return;
+  }
   await runDocker(["stop", cname], { timeout: 30_000 }).catch(() => {});
 }
 
@@ -294,6 +298,7 @@ export async function setNoSleep(_nameOrId: string, _noSleep: boolean): Promise<
 export async function deleteWorkspace(name: string): Promise<void> {
   const cname = containerName(name);
   _urlByWorkspace.delete(baseName(name));
+  await closeDockerTunnels(cname);
   await runDocker(["rm", "-f", cname], { timeout: 30_000 }).catch(() => {});
 }
 
@@ -316,27 +321,34 @@ export function normalizeMagsAppUrl(url: string | null | undefined): string {
 }
 
 export async function startBrowserSession(
-  opts: { name?: string; timeout?: number } = {}
+  opts: { name?: string; timeout?: number; workspaceId?: string } = {}
 ): Promise<BrowserSession> {
   await ensureDocker();
   const image = env.SANDBOX_BROWSER_IMAGE;
   await ensureImage(image);
 
-  // Internal CDP port. In host mode it must be unique per session (shared host
-  // net), so randomize; in bridge mode it stays 9222 and is published to a unique
-  // host port.
-  const internalPort = HOST_MODE ? 9222 + Math.floor(Math.random() * 4000) : 9222;
+  // Chromium binds DevTools to its own 127.0.0.1 whatever --remote-debugging-address
+  // says, so it is reached through a docker-exec tunnel, never a published port. The
+  // port is randomized because a workspace-attached browser shares that namespace.
+  const internalPort = 9222 + Math.floor(Math.random() * 4000);
   const cname = containerName(`browser-${opts.name ?? "cdp"}-${internalPort}`);
   await runDocker(["rm", "-f", cname], { timeout: 15_000 }).catch(() => {});
 
-  const args = ["run", "-d", "--name", cname, "--label", "lfg.sandbox=1", "--network", env.SANDBOX_DOCKER_NETWORK];
-  if (!HOST_MODE) args.push("-p", `127.0.0.1:0:${internalPort}`);
+  // Attached to a workspace, the browser joins that container's network namespace:
+  // its localhost IS the app's localhost, so an app on any port (or bound to
+  // 127.0.0.1 only) is reachable exactly as the agent sees it.
+  const workspace = opts.workspaceId && !HOST_MODE ? containerName(opts.workspaceId) : "";
+  if (workspace && (await containerState(workspace)) !== "running") {
+    throw new Error(`Sandbox '${opts.workspaceId}' is not running; the browser cannot join it.`);
+  }
+  const network = workspace ? `container:${workspace}` : env.SANDBOX_DOCKER_NETWORK;
+  const args = ["run", "-d", "--name", cname, "--label", "lfg.sandbox=1", "--network", network];
   args.push(
     image,
     "--no-sandbox",
     "--headless=new",
     "--disable-gpu",
-    "--remote-debugging-address=0.0.0.0",
+    "--disable-dev-shm-usage",
     `--remote-debugging-port=${internalPort}`,
     "about:blank"
   );
@@ -345,22 +357,21 @@ export async function startBrowserSession(
     throw new Error(`Failed to start browser container '${cname}':\n${r.stderr.trim()}`);
   }
 
-  const httpBase = previewHostBase();
-  const port = HOST_MODE ? internalPort : (await dockerHostPort(cname, internalPort)) ?? internalPort;
-  const cdpHttpUrl = `${httpBase}:${port}`;
-  const wsHost = new URL(httpBase).host; // e.g. localhost
+  // Host mode shares the host network, so the port is directly reachable.
+  const port = HOST_MODE ? internalPort : await dockerTunnel(cname, internalPort);
+  const cdpHttpUrl = `http://127.0.0.1:${port}`;
 
   // Poll /json/version until Chromium's CDP endpoint is up.
   const deadline = Date.now() + (opts.timeout ?? 30_000);
   let wsEndpoint = "";
   while (Date.now() < deadline) {
     try {
-      const ver = (await fetch(`${cdpHttpUrl}/json/version`).then((x) => x.json())) as {
+      const ver = (await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(5000) }).then((x) => x.json())) as {
         webSocketDebuggerUrl?: string;
       };
       if (ver.webSocketDebuggerUrl) {
-        // Keep the public host:port, take only Chromium's /devtools/... path.
-        wsEndpoint = `ws://${wsHost}:${port}${new URL(ver.webSocketDebuggerUrl).pathname}`;
+        // Keep the tunnel host:port, take only Chromium's /devtools/... path.
+        wsEndpoint = `ws://127.0.0.1:${port}${new URL(ver.webSocketDebuggerUrl).pathname}`;
         break;
       }
     } catch {
@@ -369,9 +380,11 @@ export async function startBrowserSession(
     await new Promise((res) => setTimeout(res, 500));
   }
   if (!wsEndpoint) {
+    const logs = await runDocker(["logs", "--tail", "20", cname], { timeout: 10_000 }).catch(() => null);
+    await closeDockerTunnels(cname);
     await runDocker(["rm", "-f", cname], { timeout: 15_000 }).catch(() => {});
-    throw new Error(`Browser container '${cname}' did not expose a CDP endpoint in time.`);
+    throw new Error(`Browser container '${cname}' did not expose a CDP endpoint in time.${logs?.stderr ? "\n" + logs.stderr.trim().slice(-800) : ""}`);
   }
 
-  return { requestId: cname, wsEndpoint, cdpHttpUrl };
+  return { requestId: cname, wsEndpoint, cdpHttpUrl, sharesWorkspaceNetwork: !!workspace || undefined };
 }

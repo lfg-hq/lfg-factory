@@ -366,7 +366,9 @@ export async function startBrowserSession(opts?: {
    * it is running returns the running one.
    */
   meet?: boolean;
-}): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string }> {
+  /** Docker backend only: attach the browser to this sandbox's network. Mags browsers reach the app by its public URL. */
+  workspaceId?: string;
+}): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string; sharesWorkspaceNetwork?: boolean }> {
   const client = getClient();
   const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
   const deadline = Date.now() + (opts?.timeout ?? 90_000);

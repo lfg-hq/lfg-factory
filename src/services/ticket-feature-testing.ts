@@ -69,7 +69,7 @@ async function executeFeatureTesting(o:FeatureTestContext){
  artifacts.appUrl=new URL(local.pathname+local.search,base).href;
  artifacts.checks=plan.steps.filter(s=>s.action.startsWith('assert')).map(s=>({label:o.redact(s.label),status:'pending'}));
  await prepareRecordingDirectory(outDir);
- let session;try{session=await startBrowserSession({timeout:Math.min(360000,Math.max(1000,o.deadline-Date.now()))});}catch(e){await artifacts.abort((e as Error).message);throw e;}
+ let session;try{session=await startBrowserSession({timeout:Math.min(360000,Math.max(1000,o.deadline-Date.now())),workspaceId:o.workspaceId});}catch(e){await artifacts.abort((e as Error).message);throw e;}
  let result:any;
  const state=async(status:string,step:string)=>{await writeFile(outDir+'/status.tmp',JSON.stringify({status,step:o.redact(step),updatedAt:Date.now()}));await rename(outDir+'/status.tmp',outDir+'/status.json');await artifacts.state(status,o.redact(step));};
  try{
@@ -89,7 +89,7 @@ async function executeFeatureTesting(o:FeatureTestContext){
    child.stderr.on('data',d=>stderr=(stderr+d.toString()).slice(-2000));
    child.on('error',e=>{clearInterval(abort);clearTimeout(timer);clearTimeout(force);reject(e);});
    child.on('close',code=>{clearInterval(abort);clearTimeout(timer);clearTimeout(force);if(code===0&&done)void updates.then(()=>resolve(done));else reject(Error('Browser test worker stopped before completing: '+o.redact(stderr)));});
-   child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({wsEndpoint:session.wsEndpoint,base,outDir,storageState,steps:plan.steps}));
+   child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({wsEndpoint:session.wsEndpoint,base:session.sharesWorkspaceNetwork?local.origin:base,outDir,storageState,steps:plan.steps}));
   });
  }catch(error){result={passed:false,failure:o.redact((error as Error).message),results:[],video:await stat(outDir+'/recording.mp4').then(s=>s.size>0).catch(()=>false)};}finally{await stopWorkspace(session.requestId).catch(()=>{});}
 

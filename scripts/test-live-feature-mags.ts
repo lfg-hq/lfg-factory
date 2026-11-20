@@ -3,7 +3,7 @@
  * exactly as in a ticket. Only the AI agent is replaced by the scripted commands below.
  * Run: set -a; source .env; set +a; SANDBOX_BACKEND=mags bun scripts/test-live-feature-mags.ts
  * (creates and deletes a VM; evidence goes to S3 or local storage, copies land in EVIDENCE_DIR;
- * APP_PORT picks the app port. SANDBOX_BACKEND=docker does not work yet: see the commit message.)
+ * APP_PORT picks the app port. Works with SANDBOX_BACKEND=mags or docker.)
  */
 import {mkdir,writeFile} from 'node:fs/promises';
 import {newWorkspace,stopWorkspace,deleteWorkspace} from '../src/services/mags.ts';
