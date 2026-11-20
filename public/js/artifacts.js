@@ -47,6 +47,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // gone, which reads as a stuck screen. Called from every close path below.
     function closeTicketDetail() {
         const t = window.TicketAgentChat;
+        // A ticket open INSIDE the panel goes away with the panel and is still there
+        // when it comes back; only the floating one would be left stranded.
+        if (t && typeof t.isDocked === 'function' && t.isDocked()) return;
         if (t && typeof t.isOpen === 'function' && t.isOpen() && typeof t.close === 'function') {
             try { t.close(); } catch (e) { console.warn('closing ticket detail failed:', e); }
         }

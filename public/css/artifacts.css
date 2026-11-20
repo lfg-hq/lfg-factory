@@ -5006,3 +5006,21 @@ body.ticket-modal-open {
 #filebrowser.tab-pane, #checklist.tab-pane { padding: 0; }
 #filebrowser .filebrowser-header { padding: 16px; }
 #checklist .checklist-container { padding: 4px 16px 16px !important; }
+
+/* Ticket opened inside the Tickets tab (public/js/ticket-agent.js docks #ticket-agent-panel
+   into .tab-content). It replaces the list while Tickets is the active tab and hides with
+   the tab, so switching to Docs and back keeps your place. */
+#ticket-agent-panel.ta-docked { position:absolute !important; inset:0 !important; top:0 !important; left:0 !important; right:0 !important; bottom:0 !important;
+  z-index:5 !important; border:0 !important; border-radius:0 !important; box-shadow:none !important; background:var(--background-color, #fff) !important; display:none !important; }
+#checklist.active ~ #ticket-agent-panel.ta-docked { display:flex !important; }
+#ticket-agent-panel.ta-docked > div:first-child,
+#ticket-agent-panel.ta-docked #ta-actionbar,
+#ticket-agent-panel.ta-docked #ta-tabs { background:var(--background-color, #fff) !important; }
+#ticket-agent-panel.ta-docked > div:first-child > .fa-comments,
+#ticket-agent-panel.ta-docked #ta-exit,
+#ticket-agent-panel.ta-docked #ta-resize { display:none !important; }
+#ta-back { display:none; flex:none; width:32px; height:32px; border-radius:8px; border:0; background:transparent; color:var(--text-color, #e2e8f0); cursor:pointer; align-items:center; justify-content:center; }
+#ta-back:hover { background:var(--card-bg-hover, rgba(148,163,184,.12)); }
+#ta-back:focus-visible { outline:2px solid var(--primary-color, #8b5cf6); outline-offset:1px; }
+#ticket-agent-panel.ta-docked #ta-back { display:inline-flex; }
+#ticket-agent-panel.ta-docked #ta-actionbar { flex-wrap:wrap; row-gap:6px; }

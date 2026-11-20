@@ -577,8 +577,35 @@
     } catch (e) { button.disabled = false; button.innerHTML = '<i class="fas fa-rotate-left"></i> Undo this merge'; window.alert(e.message); }
   }
 
+  // A ticket opened from the Tickets list (or a build card) opens INSIDE the side panel,
+  // in place of the list, with a back arrow — like a document in Docs. Only "Chat with
+  // ticket" from the Preview toolbar keeps the floating layer over the chat, because there
+  // the panel is showing the live preview beside it.
+  let docked = false;
+  let homeParent = null, homeNext = null;
+  function dock(on) {
+    const p = panel();
+    const host = document.querySelector("#artifacts-panel .tab-content");
+    if (!p) return false;
+    if (!homeParent) { homeParent = p.parentNode; homeNext = p.nextSibling; }
+    if (on && host) {
+      if (p.parentNode !== host) host.appendChild(p);
+      p.classList.add("ta-docked");
+      docked = true;
+      try { if (window.ArtifactsPanel && window.ArtifactsPanel.open) window.ArtifactsPanel.open(); } catch (_) {}
+      const tabBtn = document.querySelector('.tab-button[data-tab="checklist"]');
+      if (tabBtn && !tabBtn.classList.contains("active")) tabBtn.click();
+    } else {
+      p.classList.remove("ta-docked");
+      if (p.parentNode !== homeParent) homeParent.insertBefore(p, homeNext && homeNext.parentNode === homeParent ? homeNext : null);
+      docked = false;
+    }
+    return docked;
+  }
+
   function open(id, key, name, meta, opts) {
     opts = opts || {};
+    dock(!opts.withPreview);
     ticketId = id;
     curMeta = meta || null;
     currentLogRows = [];
@@ -636,6 +663,7 @@
         if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(id);
       } catch (_) {}
     }
+    if (docked) return; // lives in the panel: no split, no chat padding to manage
     // 50-50 split: give the preview overlay half the width so the ticket chat gets the
     // other half (otherwise, with a narrow preview, the popup sprawls across the screen).
     const art = document.getElementById("artifacts-panel");
@@ -652,6 +680,7 @@
   function close() {
     const p = panel();
     if (p) p.style.display = "none";
+    if (docked) dock(false);
     renderMeta(null);
     stopPoll();
     if (fitObs) { fitObs.disconnect(); fitObs = null; }
@@ -970,10 +999,20 @@
   function startPoll() { stopPoll(); timer = setInterval(() => { loadLog(); refreshTicketState(); if (activeTab === "tasks") loadTasks(true); }, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
-  window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot, stop: stopTicket };
+  window.TicketAgentChat = { open, close, send, onWs, isOpen, isDocked: () => docked && isOpen(), attachScreenshot, stop: stopTicket };
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);
+    // Back arrow for the docked view: returns to the ticket list.
+    const exit = $("ta-exit");
+    if (exit && !$("ta-back")) {
+      const back = document.createElement("button");
+      back.id = "ta-back"; back.type = "button";
+      back.title = "Back to tickets"; back.setAttribute("aria-label", "Back to tickets");
+      back.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      back.addEventListener("click", close);
+      exit.parentNode.insertBefore(back, exit.parentNode.firstChild);
+    }
     $("ta-build")?.addEventListener("click", buildTicket);
     $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
