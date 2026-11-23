@@ -125,6 +125,7 @@ export function ChatPage({
     #ta-pane-git .ta-git-file pre { margin:0; padding:10px 12px; font-size:11.5px; line-height:1.5; overflow:auto; max-height:420px; white-space:pre; border-top:1px solid var(--border-color,#e5e7eb); background:rgba(128,128,128,.04); }
     #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
   </style>
+  <script src="/public/js/session-guard.js?v=1"></script>
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
   <link rel="stylesheet" href="/public/css/calm.css?v=5" />

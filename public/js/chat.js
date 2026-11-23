@@ -5335,6 +5335,8 @@ document.addEventListener('DOMContentLoaded', () => {
             
         } catch (error) {
             console.error('Error deleting conversation:', error);
+            // Signed out: the sign-in notice already says so; "try again" would not help.
+            if (window.lfgSignedOut) return;
             alert('Failed to delete conversation. Please try again.');
         }
     }

@@ -45,6 +45,7 @@ export const BaseLayout: FC<BaseLayoutProps> = ({
       />
       <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
       <meta name="color-scheme" content="dark light" />
+      <script src="/public/js/session-guard.js?v=1" />
       <script src="/public/js/theme-switcher.js?v=3" />
       {extraCss && <link rel="stylesheet" href={extraCss} />}
       <link rel="stylesheet" href="/public/css/calm.css?v=5" />
