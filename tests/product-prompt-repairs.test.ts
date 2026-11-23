@@ -27,6 +27,12 @@ test('quick changes are off: every change is a tracked ticket and documented beh
 test('queued work is described in plain words', () => {
   expect(prompt).toContain('say in one plain sentence what it will change for the user');
 });
+test('analysis speaks in product terms; technical detail only when asked or needed', () => {
+  expect(prompt).toContain('**Speak product first.**');
+  expect(prompt).toContain('never add a "where in the code" column or citation');
+  expect(prompt).toContain('Go technical only when the user asks how something works or where it lives');
+  expect(prompt).toContain('code-level detail waits for step 4');
+});
 test('writing for outside readers is not treated as a direct task that never asks', () => {
   expect(prompt).not.toContain('writing (a case study, summary, pitch or email): do what the request needs');
   expect(prompt).toContain('Writing for readers outside the build is different.');
