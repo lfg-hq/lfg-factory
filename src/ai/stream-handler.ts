@@ -356,7 +356,8 @@ async function buildPreviewBranchContext(projectId: string): Promise<string> {
   const who = tk ? `${tk.key ? tk.key + " — " : ""}${tk.name}` : "";
   return `The LIVE Preview the user is looking at is currently serving branch \`${branch}\`${who ? ` (ticket ${who})` : ""} — NOT the default branch. When the user's message or a screenshot is about what they see in the preview:\n` +
     `- inspectPreview already runs in THIS checkout (the branch's worktree), so use it to see the running app.\n` +
-    `- For code questions about it, call queryCodebase with ${tk ? `ticketId "${tk.id}" (or ` : ""}branch \`${branch}\`${tk ? ")" : ""} so you read THIS branch — reading the default branch would show different code and lead you to the wrong conclusion.`;
+    `- For code questions about it, call queryCodebase with ${tk ? `ticketId "${tk.id}" (or ` : ""}branch \`${branch}\`${tk ? ")" : ""} so you read THIS branch — reading the default branch would show different code and lead you to the wrong conclusion.\n` +
+    `Everything else — what the app does, planning a new feature, a requirements or analysis doc — is about the latest code on the default branch, not this preview: read it with queryCodebase without a branch, and do not read the preview's folder for it. Mention this branch only if it changes the answer.`;
 }
 
 /** Describe an image using GOOGLE (Gemini) ONLY — the cheapest vision option and, per
