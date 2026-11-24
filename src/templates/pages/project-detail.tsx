@@ -1132,7 +1132,7 @@ export function ProjectDetailPage({
           <script src="/public/js/design-preview.js"></script>
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261121-ticket-scroll2"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261124-doc-names"></script>
           <script src="/public/js/document-comments.js?v=20261121-diagrams"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),

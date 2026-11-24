@@ -7083,19 +7083,39 @@ document.addEventListener('DOMContentLoaded', function() {
             let currentEpic = '';   // '' = all, '__none__' = docs not linked to any epic
             let searchTimeout = null;
             const collapsedDocGroups = new Set();
+            // A document shows its own full name. Only a bare generic name ("Requirements",
+            // "PRD", "Technical analysis") is given its epic, so every row says what it is.
+            const GENERIC_DOC_NAMES = /^(prd|requirements?|product requirements( doc(ument)?)?|tech(nical)?[ _]analysis|design( language)?|spec(ification)?|preview|document|untitled( document)?)$/i;
             const displayDocumentName = (file, epic) => {
-                const original = file.name || file.type_display || 'Untitled document';
-                if (!epic?.epicName) return original;
-                // Only remove a matching epic prefix/suffix; preserve distinctive titles.
-                const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const epicPattern = epic.epicName.split(/[\s—–-]+/).filter(Boolean).map(escape).join('[\\s—–-]+');
-                let name = original.replace(new RegExp('^' + epicPattern + '(?:[\\s—–:|-]+|$)', 'i'), '')
-                    .replace(new RegExp('[\\s—–:|-]+' + epicPattern + '$', 'i'), '').trim();
-                if (!name) name = file.type === 'page_preview' ? 'Preview' : original;
-                return /^prd$/i.test(name) ? 'Requirements' : name;
+                const original = String(file.name || file.type_display || 'Untitled document').trim();
+                const named = /^prd$/i.test(original) ? 'Requirements' : original;
+                const ctx = epic || (file.epics || [])[0];
+                if (GENERIC_DOC_NAMES.test(original) && ctx?.epicName) return ctx.epicName + ' — ' + named;
+                return named;
             };
 
-            
+            // Group by epic (folders) or a plain newest-first list. Remembered per browser.
+            let docListMode = 'epic';
+            try { if (localStorage.getItem('lfg-docs-view') === 'list') docListMode = 'list'; } catch (_) {}
+            const fileViewMode = document.createElement('select');
+            fileViewMode.id = 'file-view-mode';
+            fileViewMode.setAttribute('aria-label', 'How to show documents');
+            fileViewMode.add(new Option('Group by epic', 'epic'));
+            fileViewMode.add(new Option('Plain list', 'list'));
+            fileViewMode.value = docListMode;
+            const docSubtitle = () => {
+                const sub = document.querySelector('#filebrowser .filebrowser-subtitle');
+                if (sub) sub.textContent = docListMode === 'list' ? 'All documents · Newest first' : 'Grouped by epic · Newest first';
+            };
+            if (fileEpicFilter && fileEpicFilter.parentNode) fileEpicFilter.after(fileViewMode);
+            docSubtitle();
+            fileViewMode.addEventListener('change', function() {
+                docListMode = this.value === 'list' ? 'list' : 'epic';
+                try { localStorage.setItem('lfg-docs-view', docListMode); } catch (_) {}
+                docSubtitle();
+                fetchFiles(1);
+            });
+
             // Function to fetch and display files
             const fetchFiles = (page = 1) => {
                 // Keep the list on screen while it refreshes; the spinner is only for the
@@ -7193,7 +7213,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             groupNewest.set(k, Math.max(groupNewest.get(k) || 0, docTime(f)));
                         }
                         const isLoose = f => !isDesign(f) && !(f.epics && f.epics.length);
+                        const listMode = docListMode === 'list';
                         data.files.sort((a, b) => {
+                            if (listMode) return docTime(b) - docTime(a);
                             if (isDesign(a) !== isDesign(b)) return isDesign(a) ? 1 : -1;
                             if (isLoose(a) !== isLoose(b)) return isLoose(a) ? -1 : 1;
                             const ak = groupKey(a), bk = groupKey(b);
@@ -7253,7 +7275,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         data.files = data.files.filter(f => f.type !== 'upload');
                         let designFolder = null;
-                        if (data.files.some(isDesign)) {
+                        if (!listMode && data.files.some(isDesign)) {
                             designFolder = document.createElement('details');
                             designFolder.className = 'document-design-folder';
                             designFolder.open = !!currentSearch || !!currentType || collapsedDocGroups.has('design-root-open');
@@ -7274,7 +7296,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             const epic = (currentEpic && currentEpic !== '__none__'
                                 ? file.epics?.find(e => e.epicId === currentEpic) : null) || file.epics?.[0];
                             const groupId = (isDesign(file) ? 'design:' : '') + (epic?.epicId || '__none__');
-                            if (isLoose(file)) {
+                            if (listMode || isLoose(file)) {
                                 // Top level, no folder: reuse one plain container so the
                                 // rows sit flush with the epic group headers.
                                 if (curDocGroup !== '__loose__') {
