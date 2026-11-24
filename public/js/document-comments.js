@@ -295,29 +295,66 @@
     onChange: null,
   };
 
+  // Find the commented text even when it runs across formatting (a bold label followed by
+  // plain text, several list items) and mark each piece. Whitespace differences between
+  // the saved selection and the page (line breaks between blocks) are ignored.
   function highlightText(container, text, commentId) {
-    if (!text || text.length < 2) return;
+    var needle = String(text || "").replace(/\s+/g, " ").trim();
+    if (needle.length < 2) return;
 
-    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    var nodes = [];
+    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentElement;
+        return p && p.closest("svg, script, style, .lfg-diagram, details") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
+    }, false);
     var node;
-    while ((node = walker.nextNode())) {
-      var idx = node.textContent.indexOf(text);
-      if (idx === -1) continue;
+    while ((node = walker.nextNode())) nodes.push(node);
 
+    // One normalised string over all text nodes, with each character's source position.
+    var flat = "", map = [], lastSpace = true;
+    nodes.forEach(function (n, ni) {
+      var t = n.textContent;
+      for (var i = 0; i < t.length; i++) {
+        var ch = t[i];
+        if (/\s/.test(ch)) {
+          if (lastSpace) continue;
+          ch = " "; lastSpace = true;
+        } else lastSpace = false;
+        flat += ch; map.push([ni, i]);
+      }
+      // Separate blocks that sit side by side with no whitespace between them.
+      if (!lastSpace && n.parentElement && nodes[ni + 1] && blockOf(n) !== blockOf(nodes[ni + 1])) {
+        flat += " "; map.push([ni, t.length]); lastSpace = true;
+      }
+    });
+
+    var idx = flat.indexOf(needle);
+    if (idx === -1) idx = flat.toLowerCase().indexOf(needle.toLowerCase());
+    if (idx === -1) return;
+    var startPos = map[idx], endPos = map[idx + needle.length - 1];
+
+    // Wrap each touched text node's part, last first so earlier offsets stay valid.
+    for (var ni = endPos[0]; ni >= startPos[0]; ni--) {
+      var n = nodes[ni];
+      var from = ni === startPos[0] ? startPos[1] : 0;
+      var to = ni === endPos[0] ? Math.min(endPos[1] + 1, n.textContent.length) : n.textContent.length;
+      if (to <= from || !n.textContent.slice(from, to).trim()) continue;
       var range = document.createRange();
-      range.setStart(node, idx);
-      range.setEnd(node, idx + text.length);
-
+      range.setStart(n, from);
+      range.setEnd(n, to);
       var mark = document.createElement("mark");
       mark.className = "comment-highlight";
       mark.dataset.commentId = commentId;
-      mark.addEventListener("click", function () {
-        showCommentThread(commentId);
-      });
-
+      mark.addEventListener("click", function () { showCommentThread(commentId); });
       range.surroundContents(mark);
-      break; // Only highlight first occurrence
     }
+  }
+
+  function blockOf(n) {
+    var el = n.parentElement;
+    return el && el.closest("p, li, h1, h2, h3, h4, h5, h6, td, th, pre, blockquote, div");
   }
 
   // ── Comment Panel ──────────────────────────────────────────────────
@@ -445,7 +482,7 @@
 
     html += '</div>';
     panel.innerHTML = html;
-    panel.style.display = "block";
+    panel.style.display = "flex"; // flex, so the list scrolls inside the panel
     var composer = document.getElementById("new-comment-text");
     if (composer) attachMentionAutocomplete(composer);
     ensureCommentsFab();

@@ -588,7 +588,7 @@ export function ChatPage({
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
   <script src="/public/js/artifacts-loader.js?v=20261124-read-comments"></script>
-  <script src="/public/js/document-comments.js?v=20261124-read-comments"></script>
+  <script src="/public/js/document-comments.js?v=20261124-highlights"></script>
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
