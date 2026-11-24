@@ -120,7 +120,7 @@ export const createTickets = tool({
       }
     }
 
-    const created: { id: string; ticketKey: string | null; name: string }[] = [];
+    const created: { id: string; ticketKey: string | null; name: string; dependsOn?: string[] }[] = [];
 
     // Insert tickets one at a time and broadcast each immediately
     for (const t of tickets) {
@@ -205,7 +205,10 @@ export const createTickets = tool({
     for (const [index, t] of tickets.entries()) {
       if (!t.dependsOn?.length || !created[index]) continue;
       const ids = await resolveTicketRefs(projectId, t.dependsOn, batchByName);
-      if (ids.length) await db.update(projectTickets).set({ dependencies: ids.filter((id) => id !== created[index]!.id), updatedAt: new Date() }).where(eq(projectTickets.id, created[index]!.id));
+      const deps = ids.filter((id) => id !== created[index]!.id);
+      if (ids.length) await db.update(projectTickets).set({ dependencies: deps, updatedAt: new Date() }).where(eq(projectTickets.id, created[index]!.id));
+      // The chat's ticket card groups the set into build steps from these.
+      if (deps.length) created[index]!.dependsOn = deps;
     }
 
     return { created: created.length, tickets: created, epicId: resolvedEpicId, name: resolvedEpicId ? (await getEpic(resolvedEpicId))?.name || "Created tickets" : "Created tickets" };

@@ -8,5 +8,6 @@ export interface ChatArtifact {
   fileType?: string;
   /** Saved version holding the content before this turn's edit; enables Review changes. */
   previousVersion?: number;
-  tickets?: Array<{ id: string; name: string; ticketKey?: string | null }>;
+  /** dependsOn: ids of tickets in this set that are built first. */
+  tickets?: Array<{ id: string; name: string; ticketKey?: string | null; dependsOn?: string[] }>;
 }

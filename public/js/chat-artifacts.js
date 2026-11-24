@@ -262,6 +262,78 @@
         foot.append(el('small', active ? 'Updates live while the build runs' : failed ? (failed.key || 'A ticket') + ' needs attention; the rest wait for it' : 'Each ticket\'s code is committed to its branch', 'ca-muted'));
         m.card.replaceChildren(head, bar, list, foot);
     }
+    // Build steps from the set's own dependencies: step 1 is what can start now, each
+    // later step waits on an earlier one. A set saved without dependencies is one list.
+    function buildSteps(tickets) {
+        const ids = new Set(tickets.map(t => t.id));
+        const step = new Map();
+        const level = (t, seen = new Set()) => {
+            if (step.has(t.id)) return step.get(t.id);
+            if (seen.has(t.id)) return 0;
+            seen.add(t.id);
+            const deps = (t.dependsOn || []).filter(id => ids.has(id)).map(id => tickets.find(x => x.id === id));
+            const n = deps.length ? 1 + Math.max(...deps.map(d => level(d, seen))) : 0;
+            step.set(t.id, n); return n;
+        };
+        tickets.forEach(t => level(t));
+        const groups = [];
+        tickets.forEach(t => { const n = step.get(t.id); (groups[n] ||= []).push(t); });
+        return groups.filter(Boolean);
+    }
+    function openTicket(m, t) {
+        if (window.TicketAgentChat?.open) window.TicketAgentChat.open(String(t.id), t.ticketKey || '', t.name || '');
+        else showTickets(m, t);
+    }
+    function openTicketsPanel(m) {
+        try { window.ArtifactsPanel?.open?.(); } catch (_) {}
+        if (window.switchTab) { window.switchTab('checklist'); window.ArtifactsLoader?.loadChecklist?.(m.projectId); }
+        else showTickets(m);
+    }
+    // One card for the whole set: every ticket in build order, then the next step.
+    function paintTickets(m, head, title) {
+        const card = m.card; const a = m.artifact;
+        const tickets = a.tickets || [];
+        const groups = buildSteps(tickets);
+        title.append(el('small', tickets.length + (tickets.length === 1 ? ' ticket' : ' tickets') + (groups.length > 1 ? ' · in build order' : ''), 'ca-muted'));
+        const list = el('div', null, 'ca-ticket-set');
+        // Up to four steps read well as headings; a longer chain would be all headings,
+        // so then each row says which numbered tickets come before it instead.
+        const headed = groups.length > 1 && groups.length <= 4;
+        const number = new Map(groups.flat().map((t, i) => [t.id, i + 1]));
+        let n = 0;
+        groups.forEach((group, i) => {
+            if (headed) list.append(el('div', i === 0 ? 'Step 1 · starts first' : 'Step ' + (i + 1) + ' · after step ' + i, 'ca-step-label'));
+            group.forEach(t => {
+                const row = button('', () => openTicket(m, t)); row.className = 'ca-set-row';
+                const name = el('span', null, 'ca-set-title'); name.append(el('span', t.name));
+                const after = (t.dependsOn || []).map(id => number.get(id)).filter(Boolean).sort((x, y) => x - y);
+                if (!headed && after.length) name.append(el('small', ' · after ' + after.join(', '), 'ca-set-after'));
+                row.append(el('span', String(++n), 'ca-set-num'), name, el('span', t.ticketKey || '', 'ca-set-key'));
+                row.setAttribute('aria-label', (t.ticketKey ? t.ticketKey + ': ' : '') + t.name);
+                row.title = t.name;
+                list.append(row);
+            });
+        });
+        const foot = el('footer', null, 'ca-foot');
+        const actions = el('div', null, 'ca-foot-actions');
+        // A build card after this one means the build was already asked for.
+        const later = [...card.parentElement?.querySelectorAll('.chat-artifact-card[data-artifact-kind="build_run"]') || []].some(c => card.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (!later && !m.buildRequested) {
+            const start = button('Start building', () => {
+                const input = document.getElementById('chat-input'); const form = document.getElementById('chat-form');
+                if (!input || !form) return;
+                input.value = 'Start building ' + (tickets.length === 1 ? (tickets[0].ticketKey || 'this ticket') : 'these ' + tickets.length + ' tickets') + ' (' + a.name + ').';
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+                form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', {cancelable:true}));
+                m.buildRequested = true; paint(m);
+            });
+            start.className = 'ca-primary';
+            actions.append(start);
+        }
+        actions.append(button('Open in Tickets', () => openTicketsPanel(m)));
+        foot.append(el('small', m.buildRequested ? 'Build requested' : 'Click a ticket to open it', 'ca-muted'), actions);
+        card.replaceChildren(head, list, foot);
+    }
     function paint(m) {
         const card = m.card; const a = m.artifact;
         if (m.reader?.isConnected) m.reader.replaceChildren(el('p', m.saved ? 'Saved to Docs' : 'Draft · not saved', 'ca-muted'), markdown(m.content || 'Writing document…'));
@@ -284,18 +356,8 @@
             if (!m.opened && !m.replayed) { m.opened = true; if (window.BoardsTab) window.BoardsTab.open(a.id, {quiet:true}); }
             return;
         }
-        if (a.kind === 'tickets') {
-            const tickets = a.tickets || [];
-            title.append(el('small', tickets.length + ' tickets', 'ca-muted'));
-            const toggle = button(m.collapsed ? '⌄' : '⌃', () => { m.collapsed = !m.collapsed; paint(m); });
-            toggle.setAttribute('aria-label', m.collapsed ? 'Show ticket preview' : 'Collapse ticket preview'); toggle.setAttribute('aria-expanded', String(!m.collapsed)); head.append(toggle);
-            const rows = el('div'); rows.hidden = m.collapsed;
-            tickets.slice(0,3).forEach(t => rows.append(ticketRow(t, m, ticket => showTickets(m, ticket))));
-            const foot = el('footer', null, 'ca-foot'); foot.append(el('small', m.collapsed ? 'Saved to Tickets' : 'Showing ' + Math.min(3,tickets.length) + ' of ' + tickets.length, 'ca-muted'), button('View all ' + tickets.length + ' ↗', () => showTickets(m)));
-            card.replaceChildren(head, rows, foot);
-        } else {
-            paintDocument(m);
-        }
+        if (a.kind === 'tickets') paintTickets(m, head, title);
+        else paintDocument(m);
     }
     function create(container, artifact, projectId, callId) {
         const card = el('article', null, 'chat-artifact-card');
@@ -313,7 +375,11 @@
         m.artifact = artifact; m.saved = true; m.interrupted = false; m.card.dataset.artifactId = artifact.id;
         if (opts.replay) m.replayed = true;
         paint(m);
-        if (artifact.kind === 'build_run') pollBuild(m);
+        if (artifact.kind === 'build_run') {
+            pollBuild(m);
+            // The ticket sets above no longer need their Start building button.
+            container.querySelectorAll('.chat-artifact-card[data-artifact-kind="tickets"]').forEach(c => { const t = models.get(c); if (t) paint(t); });
+        }
         if (artifact.kind === 'document') {
             json('/projects/' + encoded(projectId) + '/api/files/' + encoded(artifact.id) + '/content').then(result => { m.content = String(result.content || ''); paint(m); }).catch(() => {});
         }

@@ -516,8 +516,8 @@ export function AgentDetailPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
   <script src="/public/js/sidebar.js?v=20261118-peek"></script>
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
-  <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261124-ticket-set" />
+  <script src="/public/js/chat-artifacts.js?v=20261124-ticket-set"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261124-screen-strip"></script>
   <script src="/public/js/agents.js"></script>

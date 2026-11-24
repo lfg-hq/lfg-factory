@@ -34,7 +34,8 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
     return {kind:'build_run', id:'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
   }
   if (tool === 'createTickets' && Array.isArray(output.tickets)) {
-    const tickets = output.tickets.filter(t => t && typeof t.id === 'string' && t.id).map(t => ({id:t.id, name:typeof t.name === 'string' ? t.name : 'Ticket', ticketKey:typeof t.ticketKey === 'string' ? t.ticketKey : null}));
+    const tickets = output.tickets.filter(t => t && typeof t.id === 'string' && t.id).map(t => ({id:t.id, name:typeof t.name === 'string' ? t.name : 'Ticket', ticketKey:typeof t.ticketKey === 'string' ? t.ticketKey : null,
+      ...(Array.isArray(t.dependsOn) && t.dependsOn.length ? {dependsOn:t.dependsOn.filter((d: unknown): d is string => typeof d === 'string')} : {})}));
     if (!tickets.length) return null;
     return {kind:'tickets',id:callId,name:typeof output.name === 'string' ? output.name : 'Created tickets',tickets};
   }
