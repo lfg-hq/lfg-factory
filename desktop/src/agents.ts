@@ -291,7 +291,8 @@ export function runAgent(kind: AgentKind, opts: AgentRunOptions): Promise<{ sess
     child.on("close", (code, signal) => {
       if (buffer.trim()) handle(buffer.trim());
       if (signal) { reject(new Error("Cancelled")); return; }
-      if (failure) { reject(new Error(failure)); return; }
+      // The session id rides on the error, so a run that ran out of steps can be continued.
+      if (failure) { reject(Object.assign(new Error(failure), { sessionId })); return; }
       if (code !== 0) {
         const hint = /log ?in|auth|credential|401|unauthor/i.test(stderr) ? ` Open a terminal and sign in to ${adapter.label} (run \`${adapter.bin}\`).` : "";
         reject(new Error(`${adapter.label} exited with code ${code}.${hint} ${stderr.trim().slice(-800)}`.trim()));

@@ -15,13 +15,13 @@
 
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import os from "node:os";
 import type { AgentEvent, AgentKind, ClaudeTaskPayload, PreviewUrl, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
 import { RUNNER_PROTOCOL_VERSION, isAgentEffort, isAgentModel } from "./protocol.ts";
-import { LocalPreview, PreviewStopped, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
+import { LocalPreview, PreviewStopped, dependencyFingerprint, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 import { mustRun, run } from "./proc.ts";
 import { PREVIEW_DATA_PROGRAM } from "./preview-data-program.ts";
@@ -501,6 +501,48 @@ export function validatePayload(p: ClaudeTaskPayload, allowLocalRepos: boolean):
   return null;
 }
 
+// ── Installed packages shared between tickets ────────────────────────
+// Copied with the file system's clone (APFS clonefile on a Mac, reflinks elsewhere when
+// supported), so a copy takes seconds and almost no disk space.
+const cloneArgs = (from: string, to: string) => process.platform === "darwin" ? ["-cR", from, to] : ["-R", "--reflink=auto", from, to];
+
+/** Put cached node_modules into a fresh worktree. True when it did. */
+export async function restorePackages(cache: string, worktree: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const from = join(cache, "node_modules"), to = join(worktree, "node_modules");
+  if (!existsSync(from) || existsSync(to)) return false;
+  const copied = await run("cp", cloneArgs(from, to), { env, timeoutMs: 5 * 60_000 });
+  if (copied.code !== 0) { rmSync(to, { recursive: true, force: true }); return false; }
+  return true;
+}
+
+/** Keep this worktree's node_modules for later tickets, when its package files are unchanged. */
+export async function savePackages(worktree: string, cache: string, key: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const from = join(worktree, "node_modules");
+  if (!existsSync(from) || existsSync(join(cache, "node_modules"))) return;
+  // The agent changed the package files: these packages belong to a different fingerprint.
+  if (await dependencyFingerprint(worktree, "ticket-build", null, env).catch(() => null) !== key) return;
+  const tmp = cache + ".tmp-" + process.pid;
+  rmSync(tmp, { recursive: true, force: true });
+  mkdirSync(tmp, { recursive: true });
+  const copied = await run("cp", cloneArgs(from, join(tmp, "node_modules")), { env, timeoutMs: 5 * 60_000 });
+  if (copied.code !== 0) { rmSync(tmp, { recursive: true, force: true }); return; }
+  rmSync(cache, { recursive: true, force: true });
+  renameSync(tmp, cache);
+  // Keep the three most recent package sets per repository.
+  const parent = join(cache, "..");
+  const sets = readdirSync(parent).filter(n => !n.includes(".tmp-")).map(n => ({ n, t: statSync(join(parent, n)).mtimeMs })).sort((a, b) => b.t - a.t);
+  for (const old of sets.slice(3)) rmSync(join(parent, old.n), { recursive: true, force: true });
+}
+
+const isOutOfSteps = (e: unknown) => /error_max_turns|max(imum)?[ _-]?turns/i.test(String((e as Error)?.message ?? e));
+const FINISH_PROMPT = [
+  "You reached the step limit for this run. Finish the ticket now in as few steps as possible:",
+  "- complete any change that is still half done;",
+  "- rerun only the tests that failed or that cover what you just changed, not the full suite again;",
+  "- then stop and end with a short summary of what you changed and anything left undone.",
+  "Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
+].join("\n");
+
 interface TaskContext {
   workRoot: string;
   agent: AgentKind;
@@ -547,6 +589,13 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   const base = (await git(["rev-parse", "HEAD"], worktree)).trim();
   check();
 
+  // Installed packages from an earlier ticket with the same package files: a fresh
+  // worktree has none, and reinstalling cost each ticket about a minute.
+  const depsDir = join(ctx.workRoot, "deps", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));
+  const depsKey = await dependencyFingerprint(worktree, "ticket-build", null, ctx.env).catch(() => null);
+  if (depsKey && await restorePackages(join(depsDir, depsKey), worktree, ctx.env)) ctx.progress("Reused installed packages from an earlier ticket.");
+  check();
+
   const tools = (p.allowedTools?.length ? p.allowedTools.filter(t => ctx.allowedTools.includes(t)) : ctx.allowedTools);
   ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
   const attempt = (sessionId?: string) => runAgent(ctx.agent, {
@@ -555,13 +604,28 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
     onEvent: ctx.agentEvent,
     onSpawn: child => { active.child = child; },
   }).finally(() => { active.child = undefined; });
-  const { summary } = await attempt(p.sessionId).catch(async (error: Error) => {
+  const first = attempt(p.sessionId).catch(async (error: Error) => {
     if (active.cancelled) throw new Error("Cancelled");
-    if (!p.sessionId) throw error;
+    if (!p.sessionId || isOutOfSteps(error)) throw error;
     // The earlier session may live on another computer, or have expired: start fresh.
     ctx.progress("Couldn't continue the earlier session here; starting a fresh one.");
     return attempt(undefined).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
   });
+  // Out of steps near the end loses everything, since nothing is committed until the agent
+  // finishes. Continue the same session once, briefly, to finish and summarise.
+  const finished = first.catch(async (error: Error & { sessionId?: string }) => {
+    if (active.cancelled) throw new Error("Cancelled");
+    if (!isOutOfSteps(error) || !error.sessionId) throw error;
+    ctx.progress(`${AGENTS[ctx.agent].label} reached its step limit; continuing once to finish the ticket…`);
+    return runAgent(ctx.agent, {
+      prompt: FINISH_PROMPT, cwd: worktree, sessionId: error.sessionId, allowedTools: tools, maxTurns: 40, env: ctx.env, bin: ctx.bin,
+      model: isAgentModel(p.model) ? p.model : undefined, effort: isAgentEffort(p.effort) ? p.effort : undefined,
+      onEvent: ctx.agentEvent,
+      onSpawn: child => { active.child = child; },
+    }).finally(() => { active.child = undefined; }).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
+  });
+  // Keep what the agent installed for the next ticket, whether or not this one finished.
+  const { summary } = await finished.finally(() => depsKey ? savePackages(worktree, join(depsDir, depsKey), depsKey, ctx.env).catch(() => {}) : undefined);
   check();
 
   const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()

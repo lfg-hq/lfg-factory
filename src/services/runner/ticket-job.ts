@@ -15,8 +15,8 @@ import { resolveTicketAnchor } from "../epics.ts";
 import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { addLog } from "../ticket-logs.ts";
 import { enqueueJob, userHasConnectedRunner } from "./hub.ts";
-import { localAiSettings } from "./opt-in.ts";
-import { RUNNER_PROTOCOL_VERSION, type AgentKind, type ClaudeTaskPayload } from "./protocol.ts";
+import { LOCAL_AGENT_EFFORTS, localAiSettings } from "./opt-in.ts";
+import { RUNNER_PROTOCOL_VERSION, type AgentEffort, type AgentKind, type ClaudeTaskPayload } from "./protocol.ts";
 
 export class RunnerJobError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 409 = 400) { super(message); }
@@ -40,7 +40,10 @@ export function buildRunnerPrompt(ticket: {
     "",
     "## How to work",
     "- Read the code before changing it and follow the repository's existing conventions.",
-    "- Make the smallest complete change that satisfies the ticket. Add or update tests where the project has them, and run them.",
+    "- Make the smallest complete change that satisfies the ticket. Add or update tests where the project has them.",
+    "- While you work, run only the tests for what you changed (one file or a name filter). Run the full test suite, typecheck, lint and build once, at the end. A full run takes minutes, so don't repeat it after small fixes: rerun just the failing tests, then finish.",
+    "- If dependencies are already installed (node_modules exists), don't reinstall them; install only when you change the package files or something is missing.",
+    "- Edit files with your edit tools rather than writing scripts that rewrite them.",
     "- Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
     "- End with a short summary of what you changed and anything left undone.",
   ].join("\n");
@@ -58,6 +61,23 @@ export function buildFollowUpPrompt(ticket: { ticketKey: string | null; name: st
     "- Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
     "- End with a short summary of what you did.",
   ].join("\n");
+}
+
+/**
+ * How hard the agent thinks, by the ticket's complexity. Most of a build's time is the
+ * model reasoning, so a simple ticket runs one level below the person's choice (low when
+ * they chose none), and a complex one gets high when they chose none. A follow-up, or an
+ * agent without effort levels, keeps the person's choice.
+ */
+export function buildEffort(agent: AgentKind, chosen: AgentEffort | null, complexity: string | null | undefined): AgentEffort | null {
+  const levels = LOCAL_AGENT_EFFORTS[agent];
+  if (!levels.length || !complexity) return chosen;
+  if (complexity === "simple") {
+    if (!chosen) return levels.includes("low") ? "low" : null;
+    return levels[Math.max(0, levels.indexOf(chosen) - 1)] ?? chosen;
+  }
+  if (complexity === "complex" && !chosen) return levels.includes("high") ? "high" : null;
+  return chosen;
 }
 
 export async function startTicketOnRunner(input: {
@@ -82,7 +102,7 @@ export async function startTicketOnRunner(input: {
   const agent = input.agent ?? settings.agent;
   // The person's model/effort belong to their chosen agent; another agent uses its own default.
   const model = agent === settings.agent ? settings.model : null;
-  const effort = agent === settings.agent ? settings.effort : null;
+  const effort = buildEffort(agent, agent === settings.agent ? settings.effort : null, input.followUp ? null : ticket.complexity);
   // A follow-up continues the same agent's latest session on this ticket, if there is one.
   const [previous] = input.followUp
     ? await db.select({ session: runnerJobs.agentSession }).from(runnerJobs)
@@ -108,7 +128,9 @@ export async function startTicketOnRunner(input: {
     ...(effort ? { effort } : {}),
     ...(previous?.session ? { sessionId: previous.session } : {}),
     allowedTools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
-    maxTurns: 80,
+    // A build implements, tests and checks a whole ticket; 80 steps ran out before it
+    // could finish (error_max_turns), losing the work. Follow-ups are smaller.
+    maxTurns: input.followUp ? 80 : 200,
     ...(input.followUp ? {} : { build: true }),
   };
 
