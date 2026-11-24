@@ -2488,6 +2488,37 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function openPreviewFull(target) {
+        messageContainer.querySelectorAll('.page-preview-card.is-full').forEach(c => {
+            if (c === target) return;
+            c.classList.remove('is-full');
+            syncPreviewChrome(c);
+        });
+        target.classList.remove('is-collapsed');
+        target.classList.add('is-full');
+        syncPreviewChrome(target);
+    }
+
+    // A screen's button names another screen: open that one. Matches the full name,
+    // then the part after the last " · ", ignoring case; the newest screen wins.
+    window.addEventListener('message', (e) => {
+        const cards = Array.from(messageContainer.querySelectorAll('.page-preview-card'));
+        const from = e.data && cards.find(c => c.querySelector('iframe')?.contentWindow === e.source);
+        if (!from) return;
+        if (e.data.lfgScreenEscape) {
+            if (from.classList.contains('is-full')) { from.classList.remove('is-full'); syncPreviewChrome(from); }
+            return;
+        }
+        const name = typeof e.data.lfgScreen === 'string' ? e.data.lfgScreen.trim().toLowerCase() : '';
+        if (!name) return;
+        const full = c => String(c.title || '').trim().toLowerCase();
+        const short = c => full(c).split(' · ').pop();
+        const target = [...cards].reverse().find(c => full(c) === name)
+            || [...cards].reverse().find(c => short(c) === name || short(c).replace(/^\d+\.\s*/, '') === name);
+        if (target && target !== from) openPreviewFull(target);
+        else if (!target && typeof window.showToast === 'function') window.showToast('That screen isn\'t in this conversation', 'info');
+    });
+
     function renderPagePreview(fileId, fileName, opts) {
         if (!fileId) return;
         const card = document.createElement('div');
@@ -2510,7 +2541,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="page-preview-loading">Rendering preview…</div>
             </div>`;
         card.querySelector('.page-preview-name').textContent = fileName || 'Page preview';
-        messageContainer.appendChild(card);
+        // In the conversation a screen is a small thumbnail; screens made one after
+        // another share one row. Clicking a thumbnail opens it full screen, where ← →
+        // and the screen's own linked buttons move between them.
+        const shortName = document.createElement('span');
+        shortName.className = 'page-preview-short';
+        shortName.textContent = String(fileName || 'Page preview').split(' · ').pop();
+        card.title = fileName || 'Page preview';
+        card.querySelector('.page-preview-name').after(shortName);
+        let strip = messageContainer.lastElementChild;
+        if (!strip || !strip.classList.contains('page-preview-strip')) {
+            strip = document.createElement('div');
+            strip.className = 'page-preview-strip';
+            messageContainer.appendChild(strip);
+        }
+        strip.appendChild(card);
         messageContainer.querySelectorAll('.page-preview-card.is-full').forEach(syncPreviewChrome);
         scrollToBottom();
         // Say where it went. The card scrolls away with the conversation, but the page
@@ -2566,17 +2611,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         card.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-pv]');
-            if (!btn) return;
+            if (!btn) {
+                if (!card.classList.contains('is-full')) openPreviewFull(card);
+                return;
+            }
             const act = btn.getAttribute('data-pv');
             if (act === 'previous' || act === 'next') {
                 const cards = Array.from(messageContainer.querySelectorAll('.page-preview-card'));
                 const target = cards[cards.indexOf(card) + (act === 'next' ? 1 : -1)];
                 if (target) {
-                    card.classList.remove('is-full');
-                    syncPreviewChrome(card);
-                    target.classList.remove('is-collapsed');
-                    target.classList.add('is-full');
-                    syncPreviewChrome(target);
+                    openPreviewFull(target);
                     target.querySelector(`[data-pv="${act}"]`).focus();
                 }
             } else if (act === 'toggle') {

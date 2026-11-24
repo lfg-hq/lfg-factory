@@ -47,7 +47,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-icons-more" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261124-doc-purple" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261120-docedit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261124-screen-strip" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
@@ -585,7 +585,7 @@ export function ChatPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js?v=20261124-read-expand"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-  <script src="/public/js/design-preview.js"></script>
+  <script src="/public/js/design-preview.js?v=20261124-screen-links"></script>
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
   <script src="/public/js/artifacts-loader.js?v=20261124-doc-toolbar"></script>
   <script src="/public/js/document-comments.js?v=20261124-highlights"></script>
@@ -606,7 +606,7 @@ export function ChatPage({
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261120-docedit"></script>
+  <script src="/public/js/chat.js?v=20261124-screen-strip"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

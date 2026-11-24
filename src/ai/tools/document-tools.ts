@@ -122,6 +122,7 @@ export const previewPage = tool({
     "Read and reuse the actual app layout, navigation and affected screen: preserve menu labels, order, icons and flows. " +
     "Embed all CSS and inline SVG icons; external stylesheets, fonts and scripts are blocked. Style links/buttons explicitly. " +
     "Batch small copy changes. Use concise chat captions rather than duplicating previews as ASCII diagrams. " +
+    "For a flow of several screens, decide all their names first ('Feature · 1. Screen', 'Feature · 2. Screen'), then give every button or link that leads to another of them data-screen=\"<that screen's name>\" (the part after ' · ' is enough): the user clicks through the screens like a prototype. " +
     "The preview is saved as a draft. After acceptance, pass its ID in createTickets.approvedDesignDocumentIds to preserve the accepted design.",
   inputSchema: zodSchema(
     z.object({

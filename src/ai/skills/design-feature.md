@@ -25,7 +25,7 @@ Call `previewPage` with the complete HTML, optional CSS/JS and synthetic data. D
 
 If source cannot be accessed, explain the specific missing reference and offer a limited approximate mockup. Only after the user accepts that fallback, pass `approximateReason`. New apps without a repository can use standalone mockups after agreeing the visual direction.
 
-Show relevant initial, loading, empty, error, validation and success states as named preview cards with a consistent feature prefix. Keep captions short; no ASCII wireframes or duplicate text versions unless requested. Generate mobile HTML from the actual responsive rules, not desktop scaling alone.
+Show relevant initial, loading, empty, error, validation and success states as named preview cards with a consistent feature prefix. For a flow of several screens, decide every screen's name before the first `previewPage` call ("Screening setup · 1. Templates list", "Screening setup · 2. Structure builder"), then give each button, tab or link that leads to another of these screens `data-screen="<that screen's name>"` (the part after " · " is enough, e.g. `data-screen="2. Structure builder"`). In the chat the screens show as a row of thumbnails, and those buttons open the linked screen, so the user can click through the flow like a prototype. Link back as well as forward, including Cancel and Back. Keep captions short; no ASCII wireframes or duplicate text versions unless requested. Generate mobile HTML from the actual responsive rules, not desktop scaling alone.
 
 ### 3. Optional running-app comparison
 

@@ -1129,7 +1129,7 @@ export function ProjectDetailPage({
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-          <script src="/public/js/design-preview.js"></script>
+          <script src="/public/js/design-preview.js?v=20261124-screen-links"></script>
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
   <script src="/public/js/artifacts-loader.js?v=20261124-doc-toolbar"></script>
