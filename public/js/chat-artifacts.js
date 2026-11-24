@@ -146,37 +146,28 @@
         }
     }
     function paintDocument(m) {
-        // Preserve action nodes across streamed chunks and the draft-to-saved transition.
+        // One line: the agent's reply already summarises the document, so the card only
+        // names it and opens it. Saved: the sidebar. Still being written: the live draft.
         if (!m.documentUI) {
-            const head = el('header', null, 'ca-head');
+            m.open = el('button', null, 'ca-doc-line'); m.open.type = 'button';
+            m.open.addEventListener('click', () => (m.saved ? openSidebar(m) : showDocument(m)));
             const icon = el('span', '▤', 'ca-document-icon'); icon.setAttribute('aria-hidden','true');
-            const heading = el('div', null, 'ca-heading');
-            m.title = el('strong'); m.subtitle = el('small', '', 'ca-muted');
-            heading.append(m.title, m.subtitle);
-            head.append(icon, heading, button('Expand ↗', () => showDocument(m)));
-            m.excerpt = el('div', null, 'ca-excerpt');
-            const foot = el('footer', null, 'ca-foot');
-            m.status = el('small', '', 'ca-muted');
-            m.sidebar = button('View in sidebar', () => openSidebar(m));
+            m.title = el('span', '', 'ca-doc-title');
+            m.status = el('span', '', 'ca-doc-meta ca-muted');
+            const arrow = el('span', '›', 'ca-doc-arrow'); arrow.setAttribute('aria-hidden','true');
+            m.open.append(icon, m.title, m.status, arrow);
             m.review = button('Review changes', () => showChanges(m));
             m.review.className = 'ca-review-changes';
-            const actions = el('div', null, 'ca-foot-actions'); actions.append(m.review, m.sidebar);
-            foot.append(m.status, actions);
-            m.card.replaceChildren(head, m.excerpt, foot);
+            m.card.replaceChildren(m.open, m.review);
             m.documentUI = true;
         }
         m.title.textContent = m.artifact.name;
         const updated = m.saved && m.artifact.previousVersion;
-        m.subtitle.textContent = updated ? 'Document · updated' : m.saved ? 'Document' : 'Document · draft';
+        m.status.textContent = updated ? 'Document updated' : m.saved ? 'Saved to Docs' : m.interrupted ? 'Interrupted · draft not saved' : 'Writing…';
         m.card.classList.toggle('is-updated', !!updated);
+        m.card.classList.toggle('is-draft', !m.saved);
         m.review.hidden = !updated;
-        m.status.textContent = m.saved ? 'Saved to Docs' : m.interrupted ? 'Interrupted · draft not saved' : 'Writing…';
-        m.sidebar.disabled = !m.saved;
-        m.sidebar.title = m.saved ? 'Open this document in the sidebar' : 'Available once the document is saved';
-        // Title already appears in the toolbar; show the document body beneath it.
-        // Diagrams need the full view; a cut-off Mermaid fence would show as raw source.
-        const text = m.content.replace(/^# [^\n]+\n*/, '').replace(/```mermaid[\s\S]*?(```|$)/g, '*Diagram · expand to view*');
-        m.excerpt.replaceChildren(markdown(text ? text.slice(0,600) + (text.length > 600 ? '\n\n…' : '') : (m.saved ? 'Open to read the saved document.' : 'Writing document…')));
+        m.open.title = m.saved ? 'Open ' + m.artifact.name + ' in the sidebar' : 'Read the draft so far';
     }
     function ticketRow(ticket, m, open) {
         const row = button('', () => open(ticket)); row.className = 'ca-ticket-row';
