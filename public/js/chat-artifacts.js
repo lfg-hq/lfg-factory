@@ -163,7 +163,8 @@
         }
         m.title.textContent = m.artifact.name;
         const updated = m.saved && m.artifact.previousVersion;
-        m.status.textContent = updated ? 'Document updated' : m.saved ? 'Saved to Docs' : m.interrupted ? 'Interrupted · draft not saved' : 'Writing…';
+        m.status.textContent = updated ? 'Document updated' : m.saved ? '' : m.interrupted ? 'Interrupted · draft not saved' : 'Writing…';
+        m.status.hidden = !m.status.textContent;
         m.card.classList.toggle('is-updated', !!updated);
         m.card.classList.toggle('is-draft', !m.saved);
         m.review.hidden = !updated;

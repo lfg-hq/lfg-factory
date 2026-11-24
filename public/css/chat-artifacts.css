@@ -81,7 +81,7 @@
 .chat-artifact-card .ca-doc-line{display:inline-flex!important;align-items:baseline;gap:6px;min-width:0;max-width:100%;text-align:left;padding:2px 0!important;border-radius:4px!important;color:var(--ca-ink)!important}
 .chat-artifact-card .ca-doc-line:hover{background:transparent!important}
 .chat-artifact-card .ca-doc-line .ca-document-icon{font-size:14px;color:var(--ca-muted);position:relative;top:1px}
-.ca-doc-title{font-size:15px;font-weight:500;color:var(--ca-ink);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ca-ink) 30%,transparent);text-decoration-thickness:1.5px;text-underline-offset:4px;overflow-wrap:anywhere}
+.ca-doc-title{font-size:15px;font-weight:500;color:var(--primary-color,#7c3aed);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--primary-color,#7c3aed) 35%,transparent);text-decoration-thickness:1.5px;text-underline-offset:4px;overflow-wrap:anywhere}
 .chat-artifact-card .ca-doc-line:hover .ca-doc-title{text-decoration-color:currentColor}
 .ca-doc-meta{font-size:12px;white-space:nowrap;flex:none}
 .ca-doc-arrow{display:none}
