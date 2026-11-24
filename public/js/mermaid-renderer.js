@@ -219,7 +219,6 @@
                     expand.className = 'lfg-diagram-expand';
                     expand.textContent = 'Expand';
                     expand.setAttribute('aria-label', 'Expand diagram');
-                    expand.addEventListener('click', () => expandDiagram(drawing, expand, code.textContent));
                     toolbar.appendChild(expand);
                     figure.append(toolbar, drawing, details);
                     pre.replaceWith(figure);
@@ -242,6 +241,16 @@
         }));
     }
     window.renderMermaidDiagrams = render;
+    // One listener for every Expand button, so a copy of a document (the full-screen
+    // reader clones the page, and clones lose their own listeners) can expand too.
+    document.addEventListener('click', event => {
+        const expand = event.target.closest?.('.lfg-diagram-expand');
+        if (!expand) return;
+        const figure = expand.closest('.lfg-diagram');
+        const drawing = figure?.querySelector('.lfg-diagram-drawing');
+        if (!drawing) return;
+        expandDiagram(drawing, expand, figure.querySelector('details pre code')?.textContent || '');
+    });
     window.prepareMermaidForExport = async root => {
         await render(root);
         // html2canvas does not reliably capture inline SVG. Decode an SVG image first.

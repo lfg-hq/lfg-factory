@@ -100,7 +100,10 @@
 
   function setupSelectionListener() {
     var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content, #viewer-markdown");
-    if (!contentArea) return;
+    if (contentArea) bindSelection(contentArea);
+  }
+
+  function bindSelection(contentArea) {
     // The viewer element is reused for every document; listen once.
     if (contentArea.dataset.commentSelectionBound) return;
     contentArea.dataset.commentSelectionBound = "1";
@@ -136,12 +139,15 @@
       document.body.appendChild(btn);
     });
 
+    if (floatCloserBound) return;
+    floatCloserBound = true;
     document.addEventListener("mousedown", function (e) {
       if (e.target.id !== "comment-float-btn" && !e.target.closest("#comment-float-btn")) {
         removeFloatingButton();
       }
     });
   }
+  var floatCloserBound = false;
 
   function removeFloatingButton() {
     var existing = document.getElementById("comment-float-btn");
@@ -251,22 +257,43 @@
     if (window.DocEditor) {
       window.DocEditor.setHighlights(open.map(function (c) { return { id: c.id, text: c.selectedText }; }), state.fileId);
     }
+    extraAreas.forEach(function (a) { highlightArea(a, open); });
     var area = document.querySelector("#viewer-markdown");
     if (area && editorOwns(area)) return;
 
-    // Remove existing highlights
-    document.querySelectorAll("mark.comment-highlight").forEach(function (el) {
-      el.outerHTML = el.innerHTML;
-    });
-
     var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content, #viewer-markdown");
     if (!contentArea) return;
-
-    state.comments.forEach(function (comment) {
-      if (comment.isResolved) return;
-      highlightText(contentArea, comment.selectedText, comment.id);
-    });
+    highlightArea(contentArea, open);
   }
+
+  function highlightArea(area, open) {
+    area.querySelectorAll("mark.comment-highlight").forEach(function (el) {
+      el.outerHTML = el.innerHTML;
+    });
+    open.forEach(function (comment) { highlightText(area, comment.selectedText, comment.id); });
+  }
+
+  // Other views of the same document (the full-screen reader) get selection-to-comment
+  // and highlights too. Returns false when no document's comments are loaded.
+  var extraAreas = [];
+  window.DocumentComments = {
+    attach: function (area) {
+      if (!state.fileId || !area) return false;
+      if (extraAreas.indexOf(area) < 0) extraAreas.push(area);
+      if (state.canComment) bindSelection(area);
+      highlightArea(area, state.comments.filter(function (c) { return !c.isResolved && c.selectedText; }));
+      return true;
+    },
+    detach: function (area) {
+      extraAreas = extraAreas.filter(function (a) { return a !== area; });
+      removeFloatingButton();
+      var pop = document.getElementById("comment-input-popover");
+      if (pop) pop.remove();
+    },
+    toggle: function () { window.toggleCommentsPanel(); },
+    unresolvedCount: function () { return state.comments.filter(function (c) { return !c.isResolved; }).length; },
+    onChange: null,
+  };
 
   function highlightText(container, text, commentId) {
     if (!text || text.length < 2) return;
@@ -370,6 +397,8 @@
     }
 
     // Panel visibility is user-controlled — never force it open on data refresh.
+    document.body.classList.toggle("lfg-comments-open", !!state.panelOpen);
+    if (window.DocumentComments.onChange) window.DocumentComments.onChange();
     if (!state.panelOpen) {
       panel.style.display = "none";
       ensureCommentsFab();
@@ -488,6 +517,18 @@
     var card = document.querySelector('.comment-card[data-comment-id="' + commentId + '"]');
     if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+
+  // A click anywhere outside the panel closes it. Clicks that open or feed it (a
+  // highlight, the Comments buttons, the comment box, @mentions) keep it open.
+  var KEEP_PANEL_OPEN = "#comments-panel, #comments-toggle-fab, #lfg-read-comments, #comment-input-popover, " +
+    "#comment-float-btn, .mention-dropdown, mark.comment-highlight, dialog[open]";
+  document.addEventListener("mousedown", function (e) {
+    if (!state.panelOpen) return;
+    var t = e.target;
+    if (t && t.closest && t.closest(KEEP_PANEL_OPEN)) return;
+    state.panelOpen = false;
+    renderCommentPanel();
+  });
 
   window.toggleCommentsPanel = function () {
     state.panelOpen = !state.panelOpen;

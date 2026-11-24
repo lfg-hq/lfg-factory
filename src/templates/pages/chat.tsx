@@ -43,7 +43,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-ticket-in-panel2" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
-  <link rel="stylesheet" href="/public/css/document-comments.css" />
+  <link rel="stylesheet" href="/public/css/document-comments.css?v=20261124-read-comments" />
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-icons-more" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261124-doc-line" />
@@ -583,12 +583,12 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js?v=20261121-diagrams"></script>
+  <script src="/public/js/markdown-config.js?v=20261124-read-expand"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261121-ticket-scroll2"></script>
-  <script src="/public/js/document-comments.js?v=20261121-diagrams"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261124-read-comments"></script>
+  <script src="/public/js/document-comments.js?v=20261124-read-comments"></script>
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>

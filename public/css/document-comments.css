@@ -160,3 +160,29 @@ mark.comment-highlight.resolved {
   min-width: 1.1rem;
   text-align: center;
 }
+
+/* ── Full-screen reader ───────────────────────────────────────────── */
+/* The reader sits at z-index 11000; comment UI opened from it must sit above it. */
+body.lfg-reading .comments-panel { z-index: 11002; }
+body.lfg-reading .comment-float-btn,
+body.lfg-reading .comment-input-popover { z-index: 11003 !important; }
+body.lfg-reading .mention-dropdown { z-index: 11004; }
+body.lfg-reading .comments-toggle-fab { display: none !important; }
+/* Make room for the panel so it doesn't cover the page being read. */
+@media (min-width: 1100px) {
+  body.lfg-reading.lfg-comments-open #lfg-read-mode { padding-right: 340px !important; }
+}
+
+/* Lightweight actions in the comments panel: text buttons, not filled blocks. */
+.comments-panel .btn.btn-primary {
+  background: transparent !important;
+  color: var(--primary-color, #7c3aed) !important;
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem !important;
+  border-radius: 6px;
+}
+.comments-panel .btn.btn-primary:hover {
+  background: color-mix(in srgb, var(--primary-color, #7c3aed) 10%, transparent) !important;
+}

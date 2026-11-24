@@ -6801,6 +6801,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     '<i class="fas fa-book-open" style="color:' + muted + ';font-size:13px;"></i>' +
                     '<span style="font-weight:600;font-size:14px;color:' + heading + ';flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
                       (title || 'Document') + '</span>' +
+                    '<button id="lfg-read-comments" hidden style="display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid ' + border +
+                      ';border-radius:7px;color:' + heading + ';cursor:pointer;padding:5px 10px;font-size:12px;"><i class="fas fa-comments"></i><span>Comments</span></button>' +
                     '<span style="font-size:11px;color:' + muted + ';white-space:nowrap;">Esc to close</span>' +
                     '<button id="lfg-read-close" aria-label="Close read mode" style="background:transparent;border:none;color:' + muted +
                       ';cursor:pointer;padding:4px 6px;font-size:15px;line-height:1;">&times;</button>' +
@@ -6814,7 +6816,27 @@ document.addEventListener('DOMContentLoaded', function() {
             // The live document is an editor; the read view is a quiet copy of it.
             readCopy.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
             readCopy.removeAttribute('id');
+            // The copy carries the original's "selection already wired" flag; it needs its own.
+            readCopy.removeAttribute('data-comment-selection-bound');
+            // Highlights are drawn fresh below, so they can be clicked here too.
+            readCopy.querySelectorAll('mark.comment-highlight').forEach(m => m.replaceWith(...m.childNodes));
             overlay.querySelector('#lfg-read-body').appendChild(readCopy);
+
+            // Comments work here as in the sidebar: select text to comment, click a
+            // highlight or the Comments button to open the thread panel beside the page.
+            const commentsBtn = overlay.querySelector('#lfg-read-comments');
+            const canComment = !!(window.DocumentComments && window.DocumentComments.attach(readCopy));
+            if (canComment) {
+                document.body.classList.add('lfg-reading');
+                const paintCount = () => {
+                    const n = window.DocumentComments.unresolvedCount();
+                    commentsBtn.querySelector('span').textContent = n ? 'Comments (' + n + ')' : 'Comments';
+                };
+                window.DocumentComments.onChange = paintCount;
+                paintCount();
+                commentsBtn.hidden = false;
+                commentsBtn.addEventListener('click', () => window.DocumentComments.toggle());
+            }
 
             // Wider measure and comfortable spacing for reading, scoped to the modal.
             const style = document.createElement('style');
@@ -6838,6 +6860,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             function close() {
                 document.removeEventListener('keydown', onKey);
+                if (canComment) {
+                    window.DocumentComments.detach(readCopy);
+                    window.DocumentComments.onChange = null;
+                    document.body.classList.remove('lfg-reading');
+                }
                 document.body.style.overflow = prevOverflow;
                 overlay.style.opacity = '0';
                 setTimeout(function() {
@@ -6846,7 +6873,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (prevFocus && prevFocus.focus) prevFocus.focus();
                 }, 160);
             }
-            function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } }
+            function onKey(e) {
+                if (e.key !== 'Escape') return;
+                // An expanded diagram (a modal dialog) closes first, on its own.
+                if (document.querySelector('dialog[open]')) return;
+                e.stopPropagation();
+                const pop = document.getElementById('comment-input-popover');
+                if (pop) { pop.remove(); return; }
+                close();
+            }
 
             overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
             overlay.querySelector('#lfg-read-close').addEventListener('click', close);

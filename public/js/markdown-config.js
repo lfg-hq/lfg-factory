@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // One shared renderer for chat, document previews and PDF export.
 window.mermaidRendererReady = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/public/js/mermaid-renderer.js?v=20261121-diagrams';
+    script.src = '/public/js/mermaid-renderer.js?v=20261124-read-expand';
     script.onload = resolve;
     script.onerror = () => reject(new Error('Diagram renderer could not load'));
     document.head.appendChild(script);
