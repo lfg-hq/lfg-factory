@@ -75,14 +75,16 @@
 .ca-build-row[data-stage="ready"] .ca-build-stage{background:rgba(22,163,74,.12);color:#15803d}
 .ca-build-row:is([data-stage="failed"],[data-stage="stopped"]) .ca-build-stage{background:rgba(220,38,38,.1);color:#b91c1c}
 @media(max-width:520px){.chat-artifact-card .ca-build-row{grid-template-columns:12px minmax(0,1fr)}.ca-build-stage{grid-column:2;justify-self:start}}
-/* Documents show as one clickable line; the reply below already summarises them. */
-.chat-artifact-card[data-artifact-kind="document"]{display:flex;align-items:center;gap:4px;width:auto;max-width:min(100%,760px);margin:10px 0;padding:2px;border-radius:10px;box-shadow:none;background:color-mix(in srgb,var(--ca-accent) 5%,var(--ca-surface))}
-.chat-artifact-card .ca-doc-line{display:flex!important;align-items:center;gap:10px;min-width:0;flex:1;text-align:left;padding:8px 12px!important}
-.chat-artifact-card .ca-doc-line .ca-document-icon{font-size:16px}
-.ca-doc-title{font-size:14px;font-weight:500;color:var(--ca-accent);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
-.chat-artifact-card .ca-doc-line:hover .ca-doc-title{text-decoration:underline;text-underline-offset:3px}
+/* Documents show as an inline link, like a reference in text: an icon and an underlined
+   title, no box or accent colour. The reply below already summarises the document. */
+.chat-artifact-card[data-artifact-kind="document"]{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;width:auto;max-width:min(100%,760px);margin:6px 0 10px;padding:0;border:0;border-radius:0;box-shadow:none;background:transparent;overflow:visible}
+.chat-artifact-card .ca-doc-line{display:inline-flex!important;align-items:baseline;gap:6px;min-width:0;max-width:100%;text-align:left;padding:2px 0!important;border-radius:4px!important;color:var(--ca-ink)!important}
+.chat-artifact-card .ca-doc-line:hover{background:transparent!important}
+.chat-artifact-card .ca-doc-line .ca-document-icon{font-size:14px;color:var(--ca-muted);position:relative;top:1px}
+.ca-doc-title{font-size:15px;font-weight:500;color:var(--ca-ink);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ca-ink) 30%,transparent);text-decoration-thickness:1.5px;text-underline-offset:4px;overflow-wrap:anywhere}
+.chat-artifact-card .ca-doc-line:hover .ca-doc-title{text-decoration-color:currentColor}
 .ca-doc-meta{font-size:12px;white-space:nowrap;flex:none}
-.ca-doc-arrow{color:var(--ca-accent);font-size:16px;line-height:1;flex:none}
+.ca-doc-arrow{display:none}
 .chat-artifact-card.is-draft .ca-doc-meta{font-style:italic}
-.chat-artifact-card[data-artifact-kind="document"] .ca-review-changes{color:var(--ca-accent);font-size:12px;white-space:nowrap;flex:none}
+.chat-artifact-card[data-artifact-kind="document"] .ca-review-changes{color:var(--ca-muted);font-size:12px;white-space:nowrap;flex:none;padding:2px 4px!important;text-decoration:underline;text-underline-offset:3px}
 @media(max-width:520px){.ca-doc-meta{display:none}}

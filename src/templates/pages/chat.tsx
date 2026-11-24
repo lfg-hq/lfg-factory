@@ -46,7 +46,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/document-comments.css?v=20261124-read-comments" />
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-icons-more" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261124-doc-line" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261124-doc-inline" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261120-docedit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
