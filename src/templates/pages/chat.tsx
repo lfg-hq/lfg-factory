@@ -41,7 +41,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20261118-rail" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261121-ticket-in-panel2" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261124-doc-toolbar" />
   <link rel="stylesheet" href="/public/css/git-tab.css?v=20261118" />
   <link rel="stylesheet" href="/public/css/document-comments.css?v=20261124-read-comments" />
   <link rel="stylesheet" href="/public/css/workspace-status.css?v=20261121-icons-more" />
@@ -587,7 +587,7 @@ export function ChatPage({
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/doc-editor.js?v=20261121-diagrams"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261124-doc-names"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261124-doc-toolbar"></script>
   <script src="/public/js/document-comments.js?v=20261124-highlights"></script>
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />

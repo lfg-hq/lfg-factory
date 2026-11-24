@@ -7088,7 +7088,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const GENERIC_DOC_NAMES = /^(prd|requirements?|product requirements( doc(ument)?)?|tech(nical)?[ _]analysis|design( language)?|spec(ification)?|preview|document|untitled( document)?)$/i;
             const displayDocumentName = (file, epic) => {
                 const original = String(file.name || file.type_display || 'Untitled document').trim();
-                const named = /^prd$/i.test(original) ? 'Requirements' : original;
+                const cleaned = original.replace(/\s*\(?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)?\s*$/i, '').trim() || original;
+                const named = /^prd$/i.test(cleaned) ? 'Requirements' : cleaned;
                 const ctx = epic || (file.epics || [])[0];
                 if (GENERIC_DOC_NAMES.test(original) && ctx?.epicName) return ctx.epicName + ' — ' + named;
                 return named;
@@ -7097,20 +7098,37 @@ document.addEventListener('DOMContentLoaded', function() {
             // Group by epic (folders) or a plain newest-first list. Remembered per browser.
             let docListMode = 'epic';
             try { if (localStorage.getItem('lfg-docs-view') === 'list') docListMode = 'list'; } catch (_) {}
-            const fileViewMode = document.createElement('select');
+            // One small two-icon switch: folders by epic, or one flat list. The panel can
+            // be set up more than once, so drop any switch left from before first.
+            document.getElementById('file-view-mode')?.remove();
+            const fileViewMode = document.createElement('div');
             fileViewMode.id = 'file-view-mode';
+            fileViewMode.className = 'file-view-mode';
+            fileViewMode.setAttribute('role', 'group');
             fileViewMode.setAttribute('aria-label', 'How to show documents');
-            fileViewMode.add(new Option('Group by epic', 'epic'));
-            fileViewMode.add(new Option('Plain list', 'list'));
-            fileViewMode.value = docListMode;
+            const viewButton = (mode, icon, label) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.dataset.mode = mode;
+                b.title = label;
+                b.setAttribute('aria-label', label);
+                b.innerHTML = '<i class="fas ' + icon + '" aria-hidden="true"></i>';
+                return b;
+            };
+            fileViewMode.append(viewButton('epic', 'fa-folder', 'Group by epic'), viewButton('list', 'fa-list', 'Plain list'));
             const docSubtitle = () => {
                 const sub = document.querySelector('#filebrowser .filebrowser-subtitle');
                 if (sub) sub.textContent = docListMode === 'list' ? 'All documents · Newest first' : 'Grouped by epic · Newest first';
+                fileViewMode.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === docListMode)));
             };
-            if (fileEpicFilter && fileEpicFilter.parentNode) fileEpicFilter.after(fileViewMode);
+            // Sits in the title row beside refresh, so the filter row stays one line.
+            if (refreshButton && refreshButton.parentNode) refreshButton.before(fileViewMode);
+            else if (fileEpicFilter && fileEpicFilter.parentNode) fileEpicFilter.after(fileViewMode);
             docSubtitle();
-            fileViewMode.addEventListener('change', function() {
-                docListMode = this.value === 'list' ? 'list' : 'epic';
+            fileViewMode.addEventListener('click', function(e) {
+                const b = e.target.closest('button[data-mode]');
+                if (!b || b.dataset.mode === docListMode) return;
+                docListMode = b.dataset.mode === 'list' ? 'list' : 'epic';
                 try { localStorage.setItem('lfg-docs-view', docListMode); } catch (_) {}
                 docSubtitle();
                 fetchFiles(1);
@@ -7212,11 +7230,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             const k = groupKey(f);
                             groupNewest.set(k, Math.max(groupNewest.get(k) || 0, docTime(f)));
                         }
-                        const isLoose = f => !isDesign(f) && !(f.epics && f.epics.length);
+                        const isLoose = f => !(f.epics && f.epics.length);
                         const listMode = docListMode === 'list';
                         data.files.sort((a, b) => {
-                            if (listMode) return docTime(b) - docTime(a);
                             if (isDesign(a) !== isDesign(b)) return isDesign(a) ? 1 : -1;
+                            if (listMode) return docTime(b) - docTime(a);
                             if (isLoose(a) !== isLoose(b)) return isLoose(a) ? -1 : 1;
                             const ak = groupKey(a), bk = groupKey(b);
                             if (ak !== bk) return (groupNewest.get(bk) - groupNewest.get(ak)) || docEpicLabel(b).localeCompare(docEpicLabel(a), undefined, {numeric:true});
@@ -7275,7 +7293,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         data.files = data.files.filter(f => f.type !== 'upload');
                         let designFolder = null;
-                        if (!listMode && data.files.some(isDesign)) {
+                        if (data.files.some(isDesign)) {
                             designFolder = document.createElement('details');
                             designFolder.className = 'document-design-folder';
                             designFolder.open = !!currentSearch || !!currentType || collapsedDocGroups.has('design-root-open');
@@ -7283,7 +7301,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 if (designFolder.open) collapsedDocGroups.add('design-root-open');
                                 else collapsedDocGroups.delete('design-root-open');
                             });
-                            const summary = folderHeader('Design Previews', '', data.files.filter(isDesign).length);
+                            const summary = folderHeader('Screens', '', data.files.filter(isDesign).length);
                             designFolder.appendChild(summary);
                             fileBrowserList.appendChild(designFolder);
                         }
@@ -7297,13 +7315,15 @@ document.addEventListener('DOMContentLoaded', function() {
                                 ? file.epics?.find(e => e.epicId === currentEpic) : null) || file.epics?.[0];
                             const groupId = (isDesign(file) ? 'design:' : '') + (epic?.epicId || '__none__');
                             if (listMode || isLoose(file)) {
-                                // Top level, no folder: reuse one plain container so the
-                                // rows sit flush with the epic group headers.
-                                if (curDocGroup !== '__loose__') {
-                                    curDocGroup = '__loose__';
+                                // No epic folder: reuse one plain container so the rows sit
+                                // flush with the group headers. Screens always stay inside
+                                // the Screens folder, even in the plain list.
+                                const looseKey = isDesign(file) ? '__loose_screens__' : '__loose__';
+                                if (curDocGroup !== looseKey) {
+                                    curDocGroup = looseKey;
                                     groupBody = document.createElement('div');
                                     groupBody.className = 'document-loose-files';
-                                    fileBrowserList.appendChild(groupBody);
+                                    (isDesign(file) ? designFolder : fileBrowserList).appendChild(groupBody);
                                     groupCount = null;
                                 }
                             } else if (groupId !== curDocGroup) {
