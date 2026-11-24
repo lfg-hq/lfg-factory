@@ -83,6 +83,8 @@ export interface RunnerOptions {
   livenessMs?: number;
   onState?(state: RunnerState, detail?: string): void;
   onJob?(event: { jobId: string; title: string; phase: "started" | "finished" | "failed" | "declined" | "cancelled"; detail?: string }): void;
+  /** An agent started or stopped working here (builds and chat turns, not previews): the app keeps the computer awake meanwhile. */
+  onBusy?(busy: boolean): void;
   log?(line: string): void;
 }
 
@@ -103,6 +105,13 @@ export class Runner {
   private serverPings = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   readonly active = new Map<string, ActiveJob>();
+  /** Agents working right now (previews aside). */
+  private working = 0;
+  private markWorking(delta: 1 | -1) {
+    const before = this.working > 0;
+    this.working = Math.max(0, this.working + delta);
+    if (before !== this.working > 0) this.opts.onBusy?.(this.working > 0);
+  }
   /** Running previews, one per project: project id → its job and processes. */
   private readonly previews = new Map<string, PreviewEntry>();
   /** Preview offers still being approved or waiting for the one they replace, and any cancelled meanwhile. */
@@ -286,6 +295,7 @@ export class Runner {
     }
     const active: ActiveJob = { cancelled: false };
     this.active.set(job.id, active);
+    this.markWorking(1);
     this.send({ type: "job.accepted", jobId: job.id });
     this.opts.onJob?.({ jobId: job.id, title, phase: "started" });
     try {
@@ -308,6 +318,7 @@ export class Runner {
       this.opts.onJob?.({ jobId: job.id, title, phase: "failed", detail: message });
     } finally {
       this.active.delete(job.id);
+      this.markWorking(-1);
     }
   }
 
@@ -320,6 +331,7 @@ export class Runner {
     const agent = p.agent;
     const active: ActiveJob = { cancelled: false };
     this.active.set(job.id, active);
+    this.markWorking(1);
     this.send({ type: "job.accepted", jobId: job.id });
     const fail = (error: string) => this.send({ type: "job.finished", jobId: job.id, ok: false, error: error.slice(0, 2000) });
     try {
@@ -351,6 +363,7 @@ export class Runner {
       if (!active.cancelled) fail(error instanceof Error ? error.message : String(error));
     } finally {
       this.active.delete(job.id);
+      this.markWorking(-1);
     }
   }
 

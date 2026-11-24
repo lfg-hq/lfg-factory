@@ -188,3 +188,44 @@ test("runners are pinged, and one that stops answering is dropped so its job goe
   for (let i = 0; i < 50 && !offers(awake).some(o => o.job.id === job.id); i++) await Bun.sleep(10);
   expect(offers(awake).map(o => o.job.id)).toContain(job.id);
 });
+
+test("a build given up on while the computer slept is taken back when it returns still running it", async () => {
+  const mac = fakeConn("sleepy-mac", "alice", "Alice's Mac");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  expect((await jobRow(job.id)).status).toBe("running");
+
+  // The Mac slept past the grace period: the server gave the build up.
+  await db.update(runnerJobs).set({ status: "failed", error: "Lost contact with Alice's Mac.", finishedAt: new Date() }).where(eq(runnerJobs.id, job.id));
+  await db.update(projectTickets).set({ status: "failed", queueStatus: "none" }).where(eq(projectTickets.id, ticketId));
+
+  // It wakes, still building.
+  const again = fakeConn("sleepy-mac", "alice", "Alice's Mac");
+  await hub.runnerOpened(again);
+  await say(again, { type: "hello", activeJobIds: [job.id] });
+  const back = await jobRow(job.id);
+  expect(back.status).toBe("running");
+  expect(back.error).toBeNull();
+  const ticket = await ticketRow(ticketId);
+  expect(ticket.status).toBe("in_progress");
+  expect(ticket.queueStatus).toBe("executing");
+
+  await say(again, { type: "job.finished", jobId: job.id, ok: true, branch: "lfg/app-1", commitSha: "abc1234" });
+  expect((await jobRow(job.id)).status).toBe("succeeded");
+  expect((await ticketRow(ticketId)).status).toBe("review");
+});
+
+test("a job that failed for another reason is not taken back", async () => {
+  const mac = fakeConn("other-mac", "alice");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  await say(mac, { type: "job.finished", jobId: job.id, ok: false, error: "Tests failed" });
+  expect(await hub.resumeLostJobs(mac, [job.id])).toBe(0);
+  expect((await jobRow(job.id)).status).toBe("failed");
+});

@@ -410,6 +410,24 @@ async function blockedRun(projectId: string) {
   return run;
 }
 
+/**
+ * The computer building this ticket dropped off (it slept, or lost its network), so the run
+ * paused on it; now it's back and the build carried on. Un-pause the run with the ticket
+ * building again, so its finish continues the chain as usual.
+ */
+export async function ticketBuildResumed(ticketId: string): Promise<boolean> {
+  const item = await liveItemForTicket(ticketId);
+  if (!item || item.status !== "failed") return false;
+  await db.update(ticketExecutions).set({ status: "running", completedAt: null }).where(eq(ticketExecutions.id, item.id));
+  const unblocked = await db.update(agentRuns).set({ status: "running", updatedAt: new Date() })
+    .where(and(eq(agentRuns.id, item.agentRunId), eq(agentRuns.status, "blocked"))).returning({ id: agentRuns.id });
+  await logRunEvent(item.agentRunId, item.id, "run_unblocked", { ticketId, reason: "computer_reconnected" });
+  if (unblocked.length) {
+    await announce(item.agentRunId, `▶️ **${item.title || "That ticket"} is building again.** The computer building it was out of touch for a while (asleep or offline); it's back, and the build carried on where it was.`);
+  }
+  return true;
+}
+
 /** Un-block a run after the user retries the failed ticket. */
 export async function resumeBlockedRun(projectId: string): Promise<boolean> {
   // The paused run itself, even while another run (a quick change) is building.

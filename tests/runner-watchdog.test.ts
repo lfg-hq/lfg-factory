@@ -53,3 +53,18 @@ test("waking from sleep reconnects at once", () => {
   expect(made.length).toBe(2);
   expect(made[0]!.closedWith).toBe(4000);
 });
+
+test("the computer is kept awake while an agent works, and let go when it's done", async () => {
+  const { made, create } = fakeSockets();
+  const busy: boolean[] = [];
+  const runner = new Runner({ serverUrl: "http://lfg.test", token: "t", workRoot: "/tmp/lfg-wd", createSocket: create,
+    approve: async () => ({ approved: false }), agentBins: none, onBusy: b => busy.push(b) });
+  runner.start();
+  const socket = made[0]!;
+  socket.onmessage!({ data: JSON.stringify({ type: "welcome", deviceId: "d", deviceName: "Mac", protocol: 2 }) });
+  socket.onmessage!({ data: JSON.stringify({ type: "job.offer", job: { id: "j1", type: "chat_turn",
+    payload: { agent: "nobody", conversationId: "c1", projectId: "p1", prompt: "hi" } } }) });
+  for (let i = 0; i < 50 && busy.length < 2; i++) await Bun.sleep(10);
+  runner.stop();
+  expect(busy).toEqual([true, false]);
+});

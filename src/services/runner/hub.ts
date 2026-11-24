@@ -206,6 +206,8 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
           inArray(runnerJobs.id, [...active].filter(id => typeof id === "string").slice(0, 50)), like(runnerJobs.error, "Lost contact%")))
         .returning({ id: runnerJobs.id });
       if (revived.length) console.log(`[runner] ${conn.deviceName}: took back ${revived.length} preview(s) it kept running`);
+      // Likewise a build given up on while the computer slept or was offline: it carried on.
+      await resumeLostJobs(conn, [...active]);
     }
     const mine = await db.select({ id: runnerJobs.id }).from(runnerJobs)
       .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.status, "running")));
@@ -347,6 +349,34 @@ export async function cancelTicketJobs(ticketId: string): Promise<number> {
     clearTimeout(lostTimers.get(job.id)); lostTimers.delete(job.id);
   }
   return jobs.length;
+}
+
+/**
+ * Ticket jobs this computer is still running that the server gave up on while it was out of
+ * touch (asleep, offline). The computer kept them going, so take them back: running again,
+ * the ticket building, and a run paused on them carrying on. Their finish lands as usual.
+ */
+export async function resumeLostJobs(conn: Pick<RunnerConn, "deviceId" | "deviceName">, activeJobIds: unknown[]): Promise<number> {
+  const ids = activeJobIds.filter((id): id is string => typeof id === "string").slice(0, 50);
+  if (!ids.length) return 0;
+  const revived = await db.update(runnerJobs).set({ status: "running", error: null, finishedAt: null })
+    .where(and(eq(runnerJobs.deviceId, conn.deviceId), eq(runnerJobs.type, "claude_task"), eq(runnerJobs.status, "failed"),
+      inArray(runnerJobs.id, ids), like(runnerJobs.error, "Lost contact%")))
+    .returning();
+  for (const job of revived) {
+    notify(job.id, { type: "accepted", deviceName: conn.deviceName });
+    if (!job.ticketId) continue;
+    await ticketUpdate(job, { status: "in_progress", queueStatus: "executing" },
+      `Back in touch with ${conn.deviceName}. It kept building while it was away, so the build carries on.`);
+    let build = false;
+    try { build = !!(JSON.parse(job.payload) as { build?: boolean }).build; } catch { /* not a build */ }
+    if (build) {
+      const { ticketBuildResumed } = await import("../build-queue.ts");
+      await ticketBuildResumed(job.ticketId).catch(e => console.warn("[runner] resuming the build run failed:", (e as Error).message));
+    }
+  }
+  if (revived.length) console.log(`[runner] ${conn.deviceName}: took back ${revived.length} job(s) it kept running while away`);
+  return revived.length;
 }
 
 async function finishJob(jobId: string, deviceId: string,

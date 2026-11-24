@@ -10,7 +10,7 @@
  * safeStorage), this computer's device id, and the "don't ask again" project list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, systemPreferences, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -307,6 +307,8 @@ async function approveNodeDownload(info: { projectName: string; version: string;
   return response === 0;
 }
 
+let awakeBlocker: number | null = null;
+
 function startRunner() {
   runner?.stop();
   runner = null;
@@ -337,6 +339,12 @@ function startRunner() {
         : e.phase === "cancelled" ? "Cancelled" : `Declined${e.detail ? `: ${e.detail}` : ""}`;
       if (Notification.isSupported()) new Notification({ title: e.title, body }).show();
       refreshTray();
+    },
+    // A build takes a while, and a Mac that idles to sleep mid-build drops off LFG and
+    // pauses the agent. Stay awake while one runs (closing the lid still sleeps).
+    onBusy: (busy) => {
+      if (busy && awakeBlocker === null) awakeBlocker = powerSaveBlocker.start("prevent-app-suspension");
+      else if (!busy && awakeBlocker !== null) { powerSaveBlocker.stop(awakeBlocker); awakeBlocker = null; }
     },
     log: (line) => console.log(line),
   });
