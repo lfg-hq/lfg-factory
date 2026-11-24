@@ -57,13 +57,17 @@ export function ChatPage({
   <style>
     /* "Chat with ticket" log entries */
     #ta-log .ta-user { align-self:flex-end; max-width:85%; background:#7c3aed; color:#fff; padding:8px 13px; border-radius:12px 12px 3px 12px; font-size:13.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
-    #ta-log .ta-agent { align-self:flex-start; margin:10px 0; max-width:92%; background:var(--card-bg,#161616); border:1px solid var(--border-color,#2a2a2a); border-left:3px solid #34d399; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
-    #ta-log .ta-agent-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#34d399; font-weight:700; margin-bottom:4px; }
+    /* The agent's notes between actions: a plain line with a small dot, aligned with the actions. */
+    #ta-log .ta-agent { align-self:stretch; position:relative; margin:2px 0; padding:4px 8px 4px 32px; font-size:13px; line-height:1.5; color:var(--text-color,#e2e8f0); }
+    #ta-log .ta-agent::before { content:""; position:absolute; left:12px; top:11px; width:6px; height:6px; border-radius:50%; background:#34d399; }
+    #ta-log .ta-agent-label { display:none; }
+    #ta-log .ta-agent .markdown-content p { margin:0; }
+    #ta-log .ta-agent code { font-size:11.5px; padding:1px 5px; border-radius:4px; }
     #ta-log .ta-cmd { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--text-secondary,#9ca3af); padding:2px 0; }
     #ta-log .ta-out { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
     #ta-log .ta-thinking { align-self:flex-start; color:var(--text-secondary,#9ca3af); font-size:12.5px; padding:4px 2px; }
     #ta-log .markdown-content p { margin:.3em 0; }
-    #ta-log .ta-agent-fail { border-left-color:#f87171; }
+    #ta-log .ta-agent-fail::before { background:#f87171; }
     #ta-log .ta-error { align-self:flex-start; max-width:92%; background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.28); color:#fca5a5; padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.5; }
     #ta-log .ta-question { align-self:flex-start; max-width:92%; background:rgba(245,158,11,.08); border:1px solid rgba(245,158,11,.30); border-left:3px solid #f59e0b; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
     #ta-log .ta-question-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#f59e0b; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:6px; }
@@ -73,7 +77,7 @@ export function ChatPage({
     #ta-log .ta-qopt:disabled { opacity:.45; cursor:default; }
     #ta-log .ta-cmdrow { align-self:stretch; }
     /* One row per action: verb icon, what happened, a short result, optional details. */
-    #ta-log .ta-cmd-header { display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-color,#cbd5e1); padding:5px 8px; border-radius:7px; min-height:28px; }
+    #ta-log .ta-cmd-header { display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-secondary,#94a3b8); padding:3px 8px; border-radius:6px; min-height:24px; }
     #ta-log .ta-cmd-header[data-ta-toggle] { cursor:pointer; }
     #ta-log .ta-cmd-header[data-ta-toggle]:hover { background:var(--border-color,#1f1f1f); }
     #ta-log .ta-verb { width:14px; text-align:center; font-size:11px; color:var(--text-secondary,#94a3b8); flex:none; }
@@ -593,7 +597,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261121-one-link"></script>
-    <script src="/public/js/ticket-agent.js?v=20261121-ticket-in-panel"></script>
+    <script src="/public/js/ticket-agent.js?v=20261124-sleek-log"></script>
   <script src="/public/js/workspace-status.js?v=20261121-icons-more"></script>
   <script src="/public/js/env-tab.js?v=20261121-one-restart"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>

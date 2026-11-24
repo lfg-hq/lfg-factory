@@ -780,6 +780,13 @@
     if (atBottom) area.scrollTop = area.scrollHeight;
   }
 
+  // "$ python3 - <<'EOF'" says nothing about what ran: name the kind of script instead.
+  function scriptLabel(line) {
+    const m = String(line).match(/^\$?\s*(python3?|node|bun|bash|sh|zsh|ruby|psql)\b[^<]*<<-?\s*['"]?\w+['"]?\s*$/i);
+    if (!m) return line;
+    const kind = { python: "Python", python3: "Python", node: "Node", bun: "Bun", ruby: "Ruby", psql: "SQL" }[m[1].toLowerCase()] || "shell";
+    return "Ran a " + kind + " script";
+  }
   let rowSeq = 0;
   const ACTION_RE = /^(Running|Reading|Editing|Writing|Creating|Searching|Listing|Merging|Merged|Committing|Committed|Pushed|Pushing|Building|Build |Installing|Started|Starting|Cloning|Fetching|Restarting|Verifying|Continuing|Spinning|Setting up|Inspecting|Checking|Browser:)/;
   function renderRow(row) {
@@ -811,7 +818,7 @@
     const summary = resultSummary(row);
     const failed = summary === "failed" || row.jobStatus === "Failed";
     const expandable = out.length > 0 && out.trim() !== text;
-    const label = esc(text.split("\n")[0]) || "(no output)";
+    const label = esc(scriptLabel(text.split("\n")[0])) || "(no output)";
     return `<div class="ta-cmdrow ta-act${failed ? " is-failed" : ""}">
       <div class="ta-cmd-header"${expandable ? ` data-ta-toggle="${id}"` : ""}><i class="fas ${icon} ta-verb" aria-hidden="true"></i><span class="ta-cmd-text">${label}</span>${summary ? `<small class="ta-result">${esc(summary)}</small>` : ""}${expandable ? '<i class="fas fa-chevron-right ta-chev" aria-hidden="true"></i>' : ""}</div>
       ${expandable ? `<div id="${id}" class="ta-cmd-body" style="display:none;">${esc(out)}</div>` : ""}
