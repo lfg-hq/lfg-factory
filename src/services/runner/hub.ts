@@ -405,15 +405,22 @@ async function finishJob(jobId: string, deviceId: string,
     return;
   }
   const pushed = !!result.commitSha;
+  // Nothing new this time, but the branch's earlier work is on the epic branch: a retry that
+  // found the ticket already built and checked it. That's done, not a failure that pauses the run.
+  const alreadyBuilt = !pushed && !!result.mergeSha;
   await ticketUpdate(job,
     pushed
       ? { status: "review", queueStatus: "none", githubBranch: result.branch ?? job.branch, githubCommitSha: result.commitSha!, lastExecutionAt: new Date() }
-      : { status: "open", queueStatus: "none", lastExecutionAt: new Date() },
+      : alreadyBuilt
+        ? { status: "review", queueStatus: "none", githubBranch: result.branch ?? job.branch, lastExecutionAt: new Date() }
+        : { status: "open", queueStatus: "none", lastExecutionAt: new Date() },
     pushed
       ? `Pushed ${(result.commitSha ?? "").slice(0, 7)} to ${result.branch ?? job.branch}.`
-      : `${agentLabel(job)} finished without changing any files.`);
+      : alreadyBuilt
+        ? `${agentLabel(job)} found the work already on ${result.branch ?? job.branch} from an earlier attempt, checked it, and changed nothing.`
+        : `${agentLabel(job)} finished without changing any files.`);
   await recordMerge(job, result);
-  buildFinished(job, pushed ? "complete" : "failed");
+  buildFinished(job, pushed || alreadyBuilt ? "complete" : "failed");
 }
 
 /** The computer merged (or couldn't merge) the ticket branch into its epic branch. */

@@ -229,3 +229,28 @@ test("a job that failed for another reason is not taken back", async () => {
   expect(await hub.resumeLostJobs(mac, [job.id])).toBe(0);
   expect((await jobRow(job.id)).status).toBe("failed");
 });
+
+test("a retry that finds the ticket already built and merged is complete, not failed", async () => {
+  const mac = fakeConn("retry-mac", "alice");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  await say(mac, { type: "job.finished", jobId: job.id, ok: true, branch: "lfg/app-x", commitSha: null, mergeSha: "def5678" });
+  expect((await jobRow(job.id)).status).toBe("succeeded");
+  const t = await ticketRow(ticketId);
+  expect(t.status).toBe("review");
+  expect(t.githubMergeStatus).toBe("merged");
+});
+
+test("a run that changes nothing and has nothing merged still goes back to open", async () => {
+  const mac = fakeConn("empty-mac", "alice");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  await say(mac, { type: "job.finished", jobId: job.id, ok: true, branch: "lfg/app-y", commitSha: null });
+  expect((await ticketRow(ticketId)).status).toBe("open");
+});
