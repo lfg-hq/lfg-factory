@@ -151,7 +151,10 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
   // the run so the tickets waiting behind it carry on without anyone asking twice.
   if (status === "complete") {
     const [run] = await db.select({ status: agentRuns.status }).from(agentRuns).where(eq(agentRuns.id, item.agentRunId)).limit(1);
-    if (run?.status === "blocked") {
+    // With tickets building side by side, one may finish while another has paused the run.
+    const stillFailed = run?.status === "blocked" && (await db.select({ id: ticketExecutions.id }).from(ticketExecutions)
+      .where(and(eq(ticketExecutions.agentRunId, item.agentRunId), eq(ticketExecutions.status, "failed"))).limit(1)).length > 0;
+    if (run?.status === "blocked" && !stillFailed) {
       await db.update(agentRuns).set({ status: "running", updatedAt: new Date() }).where(eq(agentRuns.id, item.agentRunId));
       await logRunEvent(item.agentRunId, item.id, "run_unblocked", { ticketId });
       await announce(item.agentRunId, `▶️ **${item.title || "That ticket"} passed on retry — resuming the chain.**`);
@@ -186,19 +189,22 @@ async function dispatchNext(runId: string): Promise<string | null> {
   const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
   if (!run || (run.status !== "running" && run.status !== "planning")) return null;
 
-  // Anything already in flight → nothing to do; we build one ticket at a time.
-  const inFlight = await db.select({ id: ticketExecutions.id })
+  // Tickets whose dependencies are all built start together, up to the run's limit: on the
+  // person's computer several at once (LFG Desktop runs them side by side), in the cloud one.
+  const inFlight = (await db.select({ id: ticketExecutions.id })
     .from(ticketExecutions)
-    .where(and(eq(ticketExecutions.agentRunId, runId), inArray(ticketExecutions.status, ["queued", "running"])))
-    .limit(1);
-  if (inFlight.length) return null;
+    .where(and(eq(ticketExecutions.agentRunId, runId), inArray(ticketExecutions.status, ["queued", "running"])))).length;
 
   const pending = await pendingItems(runId);
   if (!pending.length) {
-    await finishRun(runId);
+    if (!inFlight) await finishRun(runId);
     return null;
   }
+  let slots = (await parallelLimit(run)) - inFlight;
+  if (slots <= 0) return null;
+  let first: string | null = null;
 
+  const blockers = await runDependencies(runId);
   const doneIds = new Set(
     (await db.select({ id: ticketExecutions.id })
       .from(ticketExecutions)
@@ -206,13 +212,13 @@ async function dispatchNext(runId: string): Promise<string | null> {
   );
 
   for (const item of pending) {
-    const deps = await db.select({ dependsOnId: ticketExecutionDependencies.dependsOnId })
-      .from(ticketExecutionDependencies)
-      .where(eq(ticketExecutionDependencies.executionId, item.id));
-    if (deps.some((d) => !doneIds.has(d.dependsOnId))) continue; // still blocked
+    if ((blockers.get(item.id) ?? []).some((id) => !doneIds.has(id))) continue; // still blocked
 
     if (!item.ticketId) continue;
-    await db.update(ticketExecutions).set({ status: "queued", startedAt: new Date() }).where(eq(ticketExecutions.id, item.id));
+    // Two tickets finishing at once both dispatch: only one of them gets to start each item.
+    const claimed = await db.update(ticketExecutions).set({ status: "queued", startedAt: new Date() })
+      .where(and(eq(ticketExecutions.id, item.id), eq(ticketExecutions.status, "pending"))).returning({ id: ticketExecutions.id });
+    if (!claimed.length) continue;
     await db.update(projectTickets)
       .set({ queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() })
       .where(eq(projectTickets.id, item.ticketId));
@@ -220,9 +226,49 @@ async function dispatchNext(runId: string): Promise<string | null> {
     await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId, true);
     await reportBuildStatus(item.ticketId, "queued", "Build queued.");
     emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId, ...(run.userId ? { actorId: run.userId } : {}) });
-    return item.ticketId;
+    first ??= item.ticketId;
+    if (--slots <= 0) break;
   }
-  return null; // everything left is blocked behind a failure
+  return first; // null: everything left waits on tickets still building, or behind a failure
+}
+
+/**
+ * What each item of a run waits for. The tickets' own prerequisites when they have any
+ * (so tickets that don't need each other build side by side), else the run's saved order.
+ * A prerequisite outside the run counts as already met.
+ */
+export async function runDependencies(runId: string): Promise<Map<string, string[]>> {
+  const items = await db.select({ id: ticketExecutions.id, ticketId: ticketExecutions.ticketId, deps: projectTickets.dependencies })
+    .from(ticketExecutions)
+    .leftJoin(projectTickets, eq(projectTickets.id, ticketExecutions.ticketId))
+    .where(eq(ticketExecutions.agentRunId, runId));
+  const ticketDeps = (v: unknown): string[] => {
+    const list = typeof v === "string" ? (() => { try { return JSON.parse(v); } catch { return []; } })() : v;
+    return Array.isArray(list) ? list.filter((d): d is string => typeof d === "string") : [];
+  };
+  const result = new Map<string, string[]>();
+  if (items.some((i) => ticketDeps(i.deps).length)) {
+    const itemByTicket = new Map(items.filter((i) => i.ticketId).map((i) => [i.ticketId!, i.id]));
+    for (const i of items) result.set(i.id, ticketDeps(i.deps).flatMap((t) => itemByTicket.get(t) ?? []).filter((id) => id !== i.id));
+    return result;
+  }
+  const rows = await db.select({ executionId: ticketExecutionDependencies.executionId, dependsOnId: ticketExecutionDependencies.dependsOnId })
+    .from(ticketExecutionDependencies)
+    .where(inArray(ticketExecutionDependencies.executionId, items.map((i) => i.id)));
+  for (const r of rows) result.set(r.executionId, [...(result.get(r.executionId) ?? []), r.dependsOnId]);
+  return result;
+}
+
+/** How many of a run's tickets build at once. */
+export async function parallelLimit(run: { userId: string; projectId: string }): Promise<number> {
+  const env = (name: string, fallback: number) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback; };
+  try {
+    const { resolveBuildTarget, projectRunOn } = await import("./runner/build-target.ts");
+    const [project] = await db.select({ runOn: projects.runOn }).from(projects).where(eq(projects.id, run.projectId)).limit(1);
+    const target = await resolveBuildTarget(run.userId, null, projectRunOn(project?.runOn));
+    // Cloud builds each take a paid sandbox: one at a time unless the operator raises it.
+    return target.where === "computer" ? env("BUILD_PARALLEL_COMPUTER", 3) : env("BUILD_PARALLEL_CLOUD", 1);
+  } catch { return 1; }
 }
 
 /** The run drained — mark it complete and run the finishing move. */
@@ -419,7 +465,9 @@ export async function ticketBuildResumed(ticketId: string): Promise<boolean> {
   const item = await liveItemForTicket(ticketId);
   if (!item || item.status !== "failed") return false;
   await db.update(ticketExecutions).set({ status: "running", completedAt: null }).where(eq(ticketExecutions.id, item.id));
-  const unblocked = await db.update(agentRuns).set({ status: "running", updatedAt: new Date() })
+  const otherFailed = (await db.select({ id: ticketExecutions.id }).from(ticketExecutions)
+    .where(and(eq(ticketExecutions.agentRunId, item.agentRunId), eq(ticketExecutions.status, "failed"))).limit(1)).length > 0;
+  const unblocked = otherFailed ? [] : await db.update(agentRuns).set({ status: "running", updatedAt: new Date() })
     .where(and(eq(agentRuns.id, item.agentRunId), eq(agentRuns.status, "blocked"))).returning({ id: agentRuns.id });
   await logRunEvent(item.agentRunId, item.id, "run_unblocked", { ticketId, reason: "computer_reconnected" });
   if (unblocked.length) {

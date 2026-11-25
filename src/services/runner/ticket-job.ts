@@ -44,6 +44,7 @@ export function buildRunnerPrompt(ticket: {
     "- While you work, run only the tests for what you changed (one file or a name filter). Run the full test suite, typecheck, lint and build once, at the end. A full run takes minutes, so don't repeat it after small fixes: rerun just the failing tests, then finish.",
     "- If dependencies are already installed (node_modules exists), don't reinstall them; install only when you change the package files or something is missing.",
     "- Edit files with your edit tools rather than writing scripts that rewrite them.",
+    "- Other tickets may be building on this computer at the same time, each in its own folder. Don't rely on fixed ports or shared database names: give anything you start or create for tests a name or port of its own.",
     "- Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
     "- End with a short summary of what you changed and anything left undone.",
   ].join("\n");
@@ -132,6 +133,8 @@ export async function startTicketOnRunner(input: {
     // could finish (error_max_turns), losing the work. Follow-ups are smaller.
     maxTurns: input.followUp ? 80 : 200,
     ...(input.followUp ? {} : { build: true }),
+    // Then a recorded walkthrough of the acceptance criteria (Claude Code drives the browser).
+    ...(!input.followUp && agent === "claude" ? { walkthrough: true } : {}),
   };
 
   // "executing" from the start: "queued" would let the cloud worker pick it up after a restart.

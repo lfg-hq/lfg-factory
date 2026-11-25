@@ -10,6 +10,8 @@ process.env.DATABASE_URL = join(root, "test.db");
 process.env.DATABASE_DRIVER = "sqlite";
 process.env.BETTER_AUTH_SECRET = "runner-test-secret-only-not-a-real-secret";
 process.env.BETTER_AUTH_URL = "http://localhost:8000";
+process.env.LOCAL_STORAGE_DIR = join(root, "storage");
+delete process.env.FILE_STORAGE_TYPE;
 const generation = Bun.spawnSync(["bun", "node_modules/drizzle-kit/bin.cjs", "generate", "--dialect", "sqlite", "--schema", "./src/db/schema/sqlite/index.ts", "--out", join(root, "schema")]);
 if (generation.exitCode) throw new Error(generation.stderr.toString());
 const sqlite = new Database(process.env.DATABASE_URL);
@@ -253,4 +255,38 @@ test("a run that changes nothing and has nothing merged still goes back to open"
   await say(mac, { type: "job.accepted", jobId: job.id });
   await say(mac, { type: "job.finished", jobId: job.id, ok: true, branch: "lfg/app-y", commitSha: null });
   expect((await ticketRow(ticketId)).status).toBe("open");
+});
+
+test("a build's walkthrough becomes the ticket's recorded feature test", async () => {
+  const { id: deviceId } = await hub.createRunnerDevice("alice", "Alice's Mac");
+  const mac = fakeConn(deviceId, "alice", "Alice's Mac");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  expect(JSON.parse((await jobRow(job.id)).payload).walkthrough).toBe(true);
+  await say(mac, { type: "job.accepted", jobId: job.id });
+
+  const dir = mkdtempSync(join(tmpdir(), "walk-up-"));
+  Bun.spawnSync(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x48", "-frames:v", "1", join(dir, "f.jpg")]);
+  const frame = readFileSync(join(dir, "f.jpg"));
+  const form = new FormData();
+  form.set("report", JSON.stringify({ applicable: true, checks: [{ label: "Login form works", status: "passed", actual: "Signed in" }] }));
+  form.set("frames", new Blob([frame, frame, frame, frame]), "frames.mjpeg");
+  const { handleWalkthroughUpload } = await import("../src/services/runner/walkthrough.ts");
+  const res = await handleWalkthroughUpload(new Request("http://x/", { method: "POST", body: form }), job.id, { id: deviceId, name: "Alice's Mac" });
+  const body = await res.json() as { ok: boolean; url: string; video: boolean };
+  expect(body.ok).toBe(true);
+  expect(body.video).toBe(true);
+  const key = body.url.slice("/uploads/".length);
+  const status = JSON.parse(readFileSync(join(root, "storage", key, "status.json"), "utf8"));
+  expect(status.status).toBe("passed");
+  expect(status.checks[0].label).toBe("Login form works");
+  expect(readFileSync(join(root, "storage", key, "recording.mp4")).length).toBeGreaterThan(0);
+  const logs = await db.select().from(ticketLogs).where(eq(ticketLogs.ticketId, ticketId));
+  expect(logs.some(l => l.command.startsWith("Feature testing passed on Alice's Mac") && l.command.includes(`[Watch recording](${body.url}/recording.mp4)`))).toBe(true);
+
+  // Another computer can't post to this job.
+  const other = await handleWalkthroughUpload(new Request("http://x/", { method: "POST", body: form }), job.id, { id: "someone-else", name: "X" });
+  expect(other.status).toBe(404);
 });

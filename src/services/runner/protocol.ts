@@ -70,6 +70,8 @@ export interface ClaudeTaskPayload {
   effort?: AgentEffort;
   /** A ticket build (not a ticket-chat follow-up): its finish advances any build run. Server-side only. */
   build?: boolean;
+  /** After the build, have the agent start the app and walk through the acceptance criteria in a recorded browser. */
+  walkthrough?: boolean;
 }
 
 /** One chat turn answered by the agent on the person's computer (no repo, no git). */

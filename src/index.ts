@@ -383,6 +383,15 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return trackAuthRequest(req, () => handleAuthRequest(req, url));
   }
 
+  // LFG Desktop posts a build's recorded walkthrough with its device token.
+  const walkthrough = url.pathname.match(/^\/api\/runner\/jobs\/([A-Za-z0-9-]{1,64})\/walkthrough$/);
+  if (walkthrough && req.method === "POST") {
+    const device = await authenticateRunnerToken(req.headers.get("authorization")?.replace(/^Bearer\s+/i, ""));
+    if (!device) return new Response("Unauthorized", { status: 401 });
+    const { handleWalkthroughUpload } = await import("./services/runner/walkthrough.ts");
+    return handleWalkthroughUpload(req, walkthrough[1]!, { id: device.id, name: device.name });
+  }
+
   // LFG Desktop runners: device-token auth (no browser session), outbound from the laptop.
   if (url.pathname === "/ws/runner") {
     const token = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
@@ -513,6 +522,8 @@ export default {
   // Long-running endpoints (Mags VM provisioning, Claude CLI install) can take
   // 60-300s. Disable Bun's default 10s idle timeout.
   idleTimeout: 0,
+  // A build walkthrough's recorded frames from LFG Desktop (up to 15 minutes of video).
+  maxRequestBodySize: 320 * 1024 * 1024,
 
   fetch: handleFetch,
 

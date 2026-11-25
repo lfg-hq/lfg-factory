@@ -68,6 +68,8 @@ export interface ClaudeTaskPayload {
   /** Model and effort for the agent (absent: the agent's own default). */
   model?: string;
   effort?: AgentEffort;
+  /** After the build, have the agent start the app and walk through the acceptance criteria in a recorded browser. */
+  walkthrough?: boolean;
 }
 
 /** One chat turn answered by the agent on the person's computer (no repo, no git). */

@@ -15,7 +15,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import os from "node:os";
@@ -70,6 +70,8 @@ export interface RunnerOptions {
   previewStartTimeoutMs?: number;
   /** Claude Code tools this computer allows. A job can only narrow this list. */
   allowedTools?: string[];
+  /** Builds run at once (each a full agent session and test run). Default: 3, fewer on a small machine. */
+  maxParallel?: number;
   /** Override an agent's executable (tests, or a CLI outside PATH). */
   agentBins?: Partial<Record<AgentKind, string>>;
   /** Same as agentBins.claude. */
@@ -98,7 +100,6 @@ export class Runner {
   private backoff = 1000;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private queue: BuildJobOffer[] = [];
-  private busy = false;
   private agents: Array<{ kind: AgentKind; version: string }> | undefined;
   /** When the server was last heard from, and whether it pings (older servers don't). */
   private lastHeard = 0;
@@ -267,13 +268,21 @@ export class Runner {
     }
   }
 
-  /** One job at a time: each one is a full Claude Code session. */
-  private async drain() {
-    if (this.busy) return;
-    this.busy = true;
-    try {
-      while (this.queue.length) await this.runOffer(this.queue.shift()!);
-    } finally { this.busy = false; }
+  /** Builds running now. Several at once, each in its own worktree; git steps on a shared clone take turns. */
+  private building = 0;
+  private parallel(): number {
+    const fromEnv = Number(this.opts.env?.LFG_MAX_PARALLEL_BUILDS ?? process.env.LFG_MAX_PARALLEL_BUILDS);
+    if (Number.isFinite(fromEnv) && fromEnv >= 1) return Math.min(8, Math.floor(fromEnv));
+    if (this.opts.maxParallel) return this.opts.maxParallel;
+    // Each build is an agent plus the project's test runs: about 5 GB apiece to stay comfortable.
+    return Math.max(1, Math.min(3, Math.floor(os.totalmem() / (5 * 1024 ** 3))));
+  }
+  private drain() {
+    while (this.queue.length && this.building < this.parallel()) {
+      const job = this.queue.shift()!;
+      this.building++;
+      void this.runOffer(job).catch(() => {}).finally(() => { this.building--; this.drain(); });
+    }
   }
 
   private async runOffer(job: BuildJobOffer) {
@@ -307,6 +316,7 @@ export class Runner {
         env: this.opts.env ?? process.env,
         progress: text => this.send({ type: "job.progress", jobId: job.id, text }),
         agentEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
+        uploadWalkthrough: (report, frames) => this.uploadWalkthrough(job.id, report, frames),
       });
       if (active.cancelled) { this.opts.onJob?.({ jobId: job.id, title, phase: "cancelled" }); return; }
       this.send({ type: "job.finished", jobId: job.id, ok: true, ...result });
@@ -493,6 +503,16 @@ export class Runner {
     };
   }
 
+  /** POST the walkthrough to LFG over HTTPS with this computer's token (a video is too big for the socket). */
+  private async uploadWalkthrough(jobId: string, report: WalkthroughReport, framesFile: string | null): Promise<void> {
+    const form = new FormData();
+    form.set("report", JSON.stringify(report));
+    if (framesFile) form.set("frames", new Blob([readFileSync(framesFile)], { type: "application/octet-stream" }), "frames.mjpeg");
+    const url = `${this.opts.serverUrl.replace(/\/+$/, "")}/api/runner/jobs/${encodeURIComponent(jobId)}/walkthrough`;
+    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${this.opts.token}` }, body: form, signal: AbortSignal.timeout(5 * 60_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  }
+
   private bins(): Partial<Record<AgentKind, string>> {
     return { ...(this.opts.claudeBin ? { claude: this.opts.claudeBin } : {}), ...this.opts.agentBins };
   }
@@ -534,7 +554,7 @@ export async function savePackages(worktree: string, cache: string, key: string,
   if (!existsSync(from) || existsSync(join(cache, "node_modules"))) return;
   // The agent changed the package files: these packages belong to a different fingerprint.
   if (await dependencyFingerprint(worktree, "ticket-build", null, env).catch(() => null) !== key) return;
-  const tmp = cache + ".tmp-" + process.pid;
+  const tmp = cache + ".tmp-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   const copied = await run("cp", cloneArgs(from, join(tmp, "node_modules")), { env, timeoutMs: 5 * 60_000 });
@@ -564,6 +584,109 @@ interface TaskContext {
   env: NodeJS.ProcessEnv;
   progress(text: string): void;
   agentEvent(event: AgentEvent): void;
+  /** Send the walkthrough (its checks, and the recorded frames when there are any) to LFG. */
+  uploadWalkthrough?(report: WalkthroughReport, framesFile: string | null): Promise<void>;
+}
+
+/** What the agent saw when it walked through the ticket in the browser. */
+export interface WalkthroughReport {
+  applicable: boolean;
+  reason?: string;
+  checks: Array<{ label: string; status: "passed" | "failed"; expected?: string; actual?: string }>;
+}
+
+// Builds of the same repository share its clone: one git step at a time there, while
+// the agents themselves work side by side in their own worktrees.
+const repoLocks = new Map<string, Promise<unknown>>();
+export function withRepoLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const next = (repoLocks.get(key) ?? Promise.resolve()).catch(() => {}).then(fn);
+  const tail = next.catch(() => {});
+  repoLocks.set(key, tail);
+  void tail.then(() => { if (repoLocks.get(key) === tail) repoLocks.delete(key); });
+  return next;
+}
+
+export const WALKTHROUGH_PROMPT = [
+  "The build is saved. Now show that the ticket works, the way a person would check it: in the browser.",
+  "1. Start the app from this folder, in the background, on a free port of its own (other tickets may be running apps on this computer; don't use the default port if it's taken). Use the project's own dev or start command and any local database or seed it needs for testing. Wait until it answers.",
+  "2. Use the browser tool to open the app at its full http://localhost:<port> address. The browser is being recorded for the ticket's reviewers, so move at a person's pace: sign in if needed, then go through each acceptance criterion, doing what a user would do and checking what appears.",
+  "3. Don't change the code now. If something doesn't work, record it as failed with what you saw.",
+  "4. Stop the app you started.",
+  "End your reply with one JSON block, and nothing after it:",
+  "```json",
+  '{"applicable": true, "checks": [{"label": "<the acceptance criterion, short>", "status": "passed" | "failed", "expected": "<what should happen>", "actual": "<what you saw>"}]}',
+  "```",
+  'If this ticket has nothing a person could see or do in a browser (a pure backend, data or tooling change), don\'t start anything: reply with {"applicable": false, "reason": "<one sentence>", "checks": []}.',
+].join("\n");
+
+/** The JSON block at the end of the walkthrough reply. */
+export function parseWalkthrough(text: string | undefined): WalkthroughReport | null {
+  if (!text) return null;
+  const blocks = [...text.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)].map(m => m[1]!);
+  const raw = blocks.at(-1) ?? text.slice(text.lastIndexOf('{"applicable"'));
+  try {
+    const j = JSON.parse(raw) as Partial<WalkthroughReport>;
+    const checks = (Array.isArray(j.checks) ? j.checks : []).slice(0, 30).flatMap(c => c && typeof c.label === "string" ? [{
+      label: c.label.slice(0, 300), status: c.status === "passed" ? "passed" as const : "failed" as const,
+      ...(typeof c.expected === "string" ? { expected: c.expected.slice(0, 600) } : {}),
+      ...(typeof c.actual === "string" ? { actual: c.actual.slice(0, 600) } : {}),
+    }] : []);
+    return { applicable: j.applicable !== false, ...(typeof j.reason === "string" ? { reason: j.reason.slice(0, 300) } : {}), checks };
+  } catch { return null; }
+}
+
+/** Apps the walkthrough left listening, started from inside this worktree: stop them. */
+async function stopAppsFrom(worktree: string, env: NodeJS.ProcessEnv) {
+  if (process.platform === "win32") return;
+  const listening = await run("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-t"], { env, timeoutMs: 15_000 }).catch(() => null);
+  for (const pid of new Set((listening?.stdout ?? "").split("\n").map(s => s.trim()).filter(Boolean))) {
+    const cwd = await run("lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"], { env, timeoutMs: 10_000 }).catch(() => null);
+    const dir = (cwd?.stdout ?? "").split("\n").find(l => l.startsWith("n"))?.slice(1);
+    if (dir && (dir === worktree || dir.startsWith(worktree + "/"))) { try { process.kill(Number(pid), "SIGTERM"); } catch { /* gone */ } }
+  }
+}
+
+/**
+ * After a build: the agent starts the app and goes through the acceptance criteria in a
+ * recorded browser. Never fails the build; what it found goes to the ticket as feature testing.
+ */
+async function recordWalkthrough(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext, worktree: string, sessionId: string, tools: string[]) {
+  if (!ctx.uploadWalkthrough) return;
+  const p = job.payload;
+  const dir = join(ctx.workRoot, "recordings");
+  mkdirSync(dir, { recursive: true });
+  const frames = join(dir, `${job.id}.mjpeg`);
+  rmSync(frames, { force: true });
+  ctx.progress("Feature testing: starting the app on this computer and walking through the acceptance criteria in a recorded browser…");
+  let report: WalkthroughReport | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      runAgent(ctx.agent, {
+        prompt: WALKTHROUGH_PROMPT, cwd: worktree, sessionId, allowedTools: tools, maxTurns: 60, env: ctx.env, bin: ctx.bin,
+        model: isAgentModel(p.model) ? p.model : undefined, effort: "low",
+        localMcp: { preview: { command: process.execPath, args: [PREVIEW_BROWSER_SCRIPT], env: {
+          ELECTRON_RUN_AS_NODE: "1", LFG_BROWSER_ANY_LOCAL: "1", LFG_BROWSER_RECORD: frames,
+          LFG_PREVIEW_PROFILE: join(dir, `profile-${job.id}`),
+        } } },
+        onEvent: ctx.agentEvent,
+        onSpawn: child => { active.child = child; },
+      }).finally(() => { active.child = undefined; }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => { active.child?.kill("SIGTERM"); reject(new Error("The walkthrough took longer than 15 minutes.")); }, 15 * 60_000); }),
+    ]);
+    report = parseWalkthrough(result.summary) ?? { applicable: true, checks: [], reason: "The agent didn't report its checks." };
+  } catch (error) {
+    if (active.cancelled) return;
+    report = { applicable: true, checks: [], reason: `The walkthrough didn't finish: ${(error as Error).message.slice(0, 300)}` };
+  } finally {
+    clearTimeout(timer);
+    await stopAppsFrom(worktree, ctx.env).catch(() => {});
+    rmSync(join(dir, `profile-${job.id}`), { recursive: true, force: true });
+  }
+  const hasFrames = existsSync(frames) && statSync(frames).size > 0;
+  await ctx.uploadWalkthrough(report, hasFrames ? frames : null)
+    .catch(e => ctx.progress(`Feature testing: couldn't send the recording to LFG (${(e as Error).message.slice(0, 200)}).`));
+  rmSync(frames, { force: true });
 }
 
 export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
@@ -576,6 +699,7 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
 
   mkdirSync(join(ctx.workRoot, "repos"), { recursive: true });
   mkdirSync(join(ctx.workRoot, "worktrees"), { recursive: true });
+  const base = await withRepoLock(repoDir, async () => {
   if (!existsSync(join(repoDir, ".git"))) {
     ctx.progress(`Cloning ${p.repoUrl}…`);
     await mustRun("git", ["clone", "--", p.repoUrl, repoDir], { env: ctx.env, timeoutMs: 30 * 60_000 }, "git clone");
@@ -599,7 +723,8 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   await git(["worktree", "prune"]);
   ctx.progress(`Checking out ${p.branch} from ${start}…`);
   await git(["worktree", "add", "-B", p.branch, worktree, start]);
-  const base = (await git(["rev-parse", "HEAD"], worktree)).trim();
+  return (await git(["rev-parse", "HEAD"], worktree)).trim();
+  });
   check();
 
   // Installed packages from an earlier ticket with the same package files: a fresh
@@ -638,11 +763,12 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
     }).finally(() => { active.child = undefined; }).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
   });
   // Keep what the agent installed for the next ticket, whether or not this one finished.
-  const { summary } = await finished.finally(() => depsKey ? savePackages(worktree, join(depsDir, depsKey), depsKey, ctx.env).catch(() => {}) : undefined);
+  const { summary, sessionId: buildSession } = await finished.finally(() => depsKey ? savePackages(worktree, join(depsDir, depsKey), depsKey, ctx.env).catch(() => {}) : undefined);
   check();
 
   const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
     ? [] : ["-c", "user.name=LFG Desktop", "-c", "user.email=lfg-desktop@localhost"];
+  const saved = await withRepoLock(repoDir, async () => {
   if ((await git(["status", "--porcelain"], worktree)).trim()) {
     await git(["add", "-A"], worktree);
     await git([...identity, "commit", "-m", p.commitMessage || "LFG Desktop changes"], worktree);
@@ -658,7 +784,14 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   // Land the ticket branch on its epic branch, like a cloud build does. Runs even
   // when this run changed nothing, so earlier unmerged work on the branch lands too.
   const merge = await mergeIntoTarget(p, { ...ctx, repoDir, identity, check, tools });
-  return { branch: p.branch, commitSha, summary, ...merge };
+  return { commitSha, merge };
+  });
+  // Saved and merged: now show it working, recorded. Its findings never fail the build.
+  if (p.walkthrough && ctx.agent === "claude" && buildSession) {
+    await recordWalkthrough(job, active, ctx, worktree, buildSession, tools).catch(() => {});
+    check();
+  }
+  return { branch: p.branch, commitSha: saved.commitSha, summary, ...saved.merge };
 }
 
 /** Merge the pushed ticket branch into `p.mergeInto` and push it. Conflicts go to the agent once. */

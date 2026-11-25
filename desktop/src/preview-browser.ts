@@ -15,7 +15,7 @@
  * The MCP stdio transport is newline-delimited JSON-RPC 2.0; stdout carries nothing else.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -50,10 +50,11 @@ export function readPreviews(stateFile: string | undefined, project: string | un
 }
 
 /** Whether `url` is one of those previews' addresses (same local host and port). */
-export function allowedUrl(url: string, previews: PreviewStateEntry[]): boolean {
+export function allowedUrl(url: string, previews: PreviewStateEntry[], anyLocal = false): boolean {
   let u: URL;
   try { u = new URL(url); } catch { return false; }
   if (!["http:", "https:"].includes(u.protocol) || !LOCAL_HOSTS.has(u.hostname) || u.username || u.password) return false;
+  if (anyLocal) return true; // a build's walkthrough: the app the agent started on this computer
   const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
   return previews.some(p => p.urls.some(x => x.port === port));
 }
@@ -62,7 +63,10 @@ export function allowedUrl(url: string, previews: PreviewStateEntry[]): boolean 
 export function resolveUrl(url: string | undefined, previews: PreviewStateEntry[]): string {
   const urls = previews.flatMap(p => p.urls);
   const primary = urls.find(u => u.primary) ?? urls[0];
-  if (!primary) throw new Error("No preview is running on this computer. Ask the person to start it in the Preview tab (Run on your computer), then try again.");
+  if (!primary) {
+    if (url && /^https?:\/\//i.test(url)) return url;
+    throw new Error("No preview is running on this computer. Ask the person to start it in the Preview tab (Run on your computer), then try again. (In a build walkthrough, open the full http://localhost:<port> address of the app you started.)");
+  }
   if (!url) return primary.url;
   if (/^https?:\/\//i.test(url)) return url;
   return new URL(url.startsWith("/") ? url : `/${url}`, primary.url).href;
@@ -119,6 +123,38 @@ export const TOOL = {
   },
 } as const;
 
+/**
+ * Records what the browser shows, for a build's walkthrough video: the page's frames
+ * (Chrome's screencast) written at a steady 2 per second as concatenated JPEGs, which
+ * the server turns into an MP4. No ffmpeg needed on this computer.
+ */
+export class FrameRecorder {
+  static readonly FPS = 2;
+  static readonly MAX_FRAMES = 2 * 60 * 10; // 10 minutes, well under upload limits
+  private latest: Buffer | null = null;
+  private fd: number | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  frames = 0;
+  constructor(private readonly file: string) {}
+  /** A frame from the page; the newest one is what the next tick writes. */
+  frame(jpeg: Buffer) { this.latest = jpeg; if (!this.timer) this.start(); }
+  private start() {
+    this.fd = openSync(this.file, "a");
+    this.timer = setInterval(() => this.tick(), 1000 / FrameRecorder.FPS);
+    this.timer.unref?.();
+  }
+  tick() {
+    if (this.fd === null || !this.latest || this.frames >= FrameRecorder.MAX_FRAMES) return;
+    writeSync(this.fd, this.latest);
+    this.frames++;
+  }
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    if (this.fd !== null) { this.tick(); closeSync(this.fd); this.fd = null; }
+  }
+}
+
 type Content = Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
 
 export class PreviewBrowser {
@@ -128,7 +164,13 @@ export class PreviewBrowser {
   private failedRequests: string[] = [];
   private blocked: string[] = [];
 
-  constructor(private readonly o: { stateFile?: string; project?: string; profileDir?: string; headless?: boolean; env?: NodeJS.ProcessEnv }) {}
+  private recorder?: FrameRecorder;
+
+  constructor(private readonly o: { stateFile?: string; project?: string; profileDir?: string; headless?: boolean; env?: NodeJS.ProcessEnv; anyLocal?: boolean; recordTo?: string }) {
+    if (o.recordTo) this.recorder = new FrameRecorder(o.recordTo);
+  }
+
+  private allowed(url: string) { return allowedUrl(url, this.previews(), this.o.anyLocal); }
 
   private previews() { return readPreviews(this.o.stateFile, this.o.project); }
 
@@ -160,7 +202,7 @@ export class PreviewBrowser {
         const req = route.request();
         let topLevel = false;
         try { topLevel = req.isNavigationRequest() && req.frame().parentFrame() === null; } catch { /* service worker request: no frame */ }
-        if (topLevel && !allowedUrl(req.url(), this.previews())) {
+        if (topLevel && !this.allowed(req.url())) {
           this.blocked.push(req.url().slice(0, 300));
           return route.abort("blockedbyclient");
         }
@@ -169,6 +211,15 @@ export class PreviewBrowser {
     }
     const page = this.context.pages()[0] ?? await this.context.newPage();
     page.setDefaultTimeout(8000);
+    if (this.recorder) {
+      const recorder = this.recorder;
+      const cdp = await this.context.newCDPSession(page);
+      cdp.on("Page.screencastFrame", (f: { data: string; sessionId: number }) => {
+        recorder.frame(Buffer.from(f.data, "base64"));
+        void cdp.send("Page.screencastFrameAck", { sessionId: f.sessionId }).catch(() => {});
+      });
+      await cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 }).catch(() => {});
+    }
     page.on("pageerror", e => this.pageErrors.push(String(e?.message ?? e).slice(0, 400)));
     page.on("response", r => {
       const type = r.request().resourceType();
@@ -217,7 +268,7 @@ export class PreviewBrowser {
       const a = input.action;
       if (a === "open") {
         const url = resolveUrl(input.url, this.previews());
-        if (!allowedUrl(url, this.previews())) throw new Error(`Only the preview's own addresses can be opened (${this.previews().flatMap(p => p.urls.map(u => u.url)).join(", ") || "none running"}).`);
+        if (!this.allowed(url)) throw new Error(`Only the preview's own addresses can be opened (${this.previews().flatMap(p => p.urls.map(u => u.url)).join(", ") || "none running"}).`);
         const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
         lines.push(`Opened ${url}${response ? ` (HTTP ${response.status()})` : ""}.`);
@@ -272,12 +323,13 @@ export class PreviewBrowser {
     return { content, isError };
   }
 
-  async close() { await this.saveSession(); await this.context?.browser()?.close().catch(() => {}); }
+  async close() { this.recorder?.stop(); await this.saveSession(); await this.context?.browser()?.close().catch(() => {}); }
 }
 
 /** Serve the browser tool over stdio (MCP). */
 export async function serve(input = process.stdin, output = process.stdout, env = process.env) {
-  const browser = new PreviewBrowser({ stateFile: env.LFG_PREVIEW_STATE, project: env.LFG_PREVIEW_PROJECT || undefined, profileDir: env.LFG_PREVIEW_PROFILE, headless: env.LFG_PREVIEW_HEADLESS !== "0", env });
+  const browser = new PreviewBrowser({ stateFile: env.LFG_PREVIEW_STATE, project: env.LFG_PREVIEW_PROJECT || undefined, profileDir: env.LFG_PREVIEW_PROFILE, headless: env.LFG_PREVIEW_HEADLESS !== "0", env,
+    anyLocal: env.LFG_BROWSER_ANY_LOCAL === "1", recordTo: env.LFG_BROWSER_RECORD || undefined });
   const send = (msg: unknown) => output.write(JSON.stringify(msg) + "\n");
   let queue: Promise<unknown> = Promise.resolve();
   const lines = createInterface({ input });
