@@ -63,3 +63,16 @@ test("git steps on one clone take turns while other work runs side by side", asy
 test("builds are told other tickets may be building alongside", () => {
   expect(buildRunnerPrompt({ ticketKey: "A-1", name: "x", description: "y", acceptanceCriteria: [] })).toContain("Other tickets may be building on this computer at the same time");
 });
+
+test("a confirm dialog is answered OK, as the person clicking would", async () => {
+  const { findBrowser, PreviewBrowser } = await import("../desktop/src/preview-browser.ts");
+  if (!findBrowser()) return; // no Chrome on this machine
+  const server = Bun.serve({ port: 0, fetch: () => new Response(`<button onclick="document.title = confirm('Switch to Live?') ? 'live' : 'test'">Live</button>`, { headers: { "content-type": "text/html" } }) });
+  const browser = new PreviewBrowser({ anyLocal: true });
+  try {
+    await browser.call({ action: "open", url: `http://localhost:${server.port}/` });
+    const r = await browser.call({ action: "click", locator: { role: "button", name: "Live" } });
+    expect(r.content[0]!.type === "text" && r.content[0]!.text).toContain('confirm: "Switch to Live?" (answered OK)');
+    expect(r.content[0]!.type === "text" && r.content[0]!.text).toContain('"live"');
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);

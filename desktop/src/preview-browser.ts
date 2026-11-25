@@ -163,6 +163,7 @@ export class PreviewBrowser {
   private pageErrors: string[] = [];
   private failedRequests: string[] = [];
   private blocked: string[] = [];
+  private dialogs: string[] = [];
 
   private recorder?: FrameRecorder;
 
@@ -221,6 +222,12 @@ export class PreviewBrowser {
       await cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 }).catch(() => {});
     }
     page.on("pageerror", e => this.pageErrors.push(String(e?.message ?? e).slice(0, 400)));
+    // A confirm()/alert()/prompt() is answered the way the person clicking would: OK. Left
+    // alone, the browser dismisses it, so "Switch to Live?" silently stayed on Test.
+    page.on("dialog", d => {
+      this.dialogs.push(`${d.type()}: "${d.message().slice(0, 200)}" (answered OK)`);
+      void d.accept(d.type() === "prompt" ? d.defaultValue() : undefined).catch(() => {});
+    });
     page.on("response", r => {
       const type = r.request().resourceType();
       if (r.status() >= 400 && (type === "fetch" || type === "xhr" || type === "document")) this.failedRequests.push(`${r.status()} ${r.request().method()} ${r.url().slice(0, 200)}`);
@@ -313,7 +320,8 @@ export class PreviewBrowser {
       if (input.screenshot && !image) image = await this.shot(page, input.fullPage).catch(() => undefined);
     }
     const take = (list: string[]) => list.splice(0, list.length).slice(-10);
-    const errors = take(this.pageErrors), failed = take(this.failedRequests), blocked = take(this.blocked);
+    const errors = take(this.pageErrors), failed = take(this.failedRequests), blocked = take(this.blocked), dialogs = take(this.dialogs);
+    if (dialogs.length) lines.push("Dialogs the page opened:\n- " + dialogs.join("\n- "));
     if (errors.length) lines.push("Errors the page raised:\n- " + errors.join("\n- "));
     if (failed.length) lines.push("Failed requests:\n- " + failed.join("\n- "));
     if (blocked.length) lines.push("Blocked navigation away from the preview:\n- " + blocked.join("\n- "));
