@@ -27,6 +27,12 @@ export interface PortfolioProject {
   client: string;
   /** Short label above the name (≤6 words). */
   tagline: string;
+  /** Where the project sits on /portfolio/: built for a client, or one of our own products. The factory itself has none. */
+  group?: "client" | "own";
+  /** Card eyebrow on /portfolio/: who it is for, e.g. "Client · Australia · Multi-site retail". */
+  eyebrow?: string;
+  /** One real, measured line on how the factory delivered it. Never an unmeasured outcome. */
+  proof?: string;
   /** One or two sentences for the card. */
   summary: string;
   /** The one-paragraph version that opens the case study. */
@@ -151,6 +157,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "KiteReach",
     client: "SaaS product, built and run by our team",
     tagline: "Sentence in, on-brand video out",
+    group: "own",
+    eyebrow: "Our product · SaaS · Content studio",
+    proof: "Live and on sale, with public pricing",
     summary:
       "An AI content studio that turns a website and a sentence into on-brand reels, short films and carousels, with the user approving the script and the look before anything renders.",
     overview:
@@ -243,6 +252,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "Mags Sandboxes",
     client: "Developer platform, built and run by our team",
     tagline: "MicroVM sandboxes for AI agents",
+    group: "own",
+    eyebrow: "Our product · Developer platform",
+    proof: "Repeat runs down from ~4 s to ~0.1 s",
     summary:
       "Isolated sandboxes for AI agents: every run gets its own Firecracker microVM, cloned from a snapshot in milliseconds, with workspaces that persist between runs.",
     overview:
@@ -331,6 +343,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "Mags Self Deploy",
     client: "Developer platform, built and run by our team",
     tagline: "Build and ship your tools to your cloud",
+    group: "own",
+    eyebrow: "Our product · Developer platform",
+    proof: "Deploys to your own servers, no lock-in",
     summary:
       "Draw your stack on a canvas, point it at your own servers, and Mags builds every app in a disposable sandbox and deploys it with HTTPS, databases and rollbacks, with no platform lock-in.",
     overview:
@@ -426,6 +441,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "Easylogs",
     client: "SaaS product, built and run by our team",
     tagline: "Logs, metrics and alerts, simplified",
+    group: "own",
+    eyebrow: "Our product · SaaS · Observability",
+    proof: "A full Django → Go rewrite, features intact",
     summary:
       "Hosted log search, server metrics and alerting for small engineering teams, with an AI agent that answers questions by running real queries on your logs.",
     overview:
@@ -516,6 +534,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "AI-Assisted Accounts Payable",
     client: "Multi-site retail operator, Australia",
     tagline: "Invoices, inbox to accounting system",
+    group: "client",
+    eyebrow: "Client · Australia · Multi-site retail",
+    proof: "3 weeks from first commit to production",
     summary:
       "A rules-first platform that reads every supplier invoice from a shared inbox, checks it, and sends it to the accounting system as a draft bill, so the accounts team verifies instead of retyping.",
     overview:
@@ -633,6 +654,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "RingDesk",
     client: "Dental practice, United States",
     tagline: "AI front desk for clinics",
+    group: "client",
+    eyebrow: "Client · United States · Dental practice",
+    proof: "5 days from scaffold to a live phone number",
     summary:
       "A voice agent that answers the clinic phone when the desk is closed or busy, books real appointments into the calendar, takes messages and sends emergencies to the right place.",
     overview:
@@ -734,6 +758,9 @@ export const PORTFOLIO: PortfolioProject[] = [
     name: "Screenline",
     client: "Recruiting firm, India",
     tagline: "AI first-round phone screening",
+    group: "client",
+    eyebrow: "Client · India · Recruiting",
+    proof: "12 days, 19 tickets to a working pilot",
     summary:
       "A recruiter workspace where a voice agent holds the first screening call and the recruiter gets notes backed by the candidate's own words. Nothing is ranked or rejected automatically.",
     overview:
