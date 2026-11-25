@@ -257,6 +257,32 @@ export class PreviewBrowser {
     await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
   }
 
+  /** Why a step's element couldn't be used: nothing matched, or it's hidden, disabled, or not that kind of field. */
+  private async describeMatch(page: Page, spec: LocatorSpec, action: string): Promise<string> {
+    try {
+      const all = this.locateAll(page, spec);
+      const count = await all.count();
+      if (!count) return `The locator matched nothing on this page${spec.exact !== false && (spec.name || spec.label || spec.text) ? " (it matches the exact text; try exact:false, or pick the name from the tree below)" : ""}.`;
+      const first = all.first();
+      const [visible, enabled, tag, type] = await Promise.all([
+        first.isVisible().catch(() => false), first.isEnabled().catch(() => false),
+        first.evaluate(e => e.tagName.toLowerCase()).catch(() => "?"), first.getAttribute("type").catch(() => null),
+      ]);
+      return `The locator matched ${count} element${count === 1 ? "" : "s"}; the first is <${tag}${type ? ` type="${type}"` : ""}>, ${visible ? "visible" : "hidden"}, ${enabled ? "enabled" : "disabled"}.` +
+        (action === "select" && tag !== "select" ? " (select only works on a <select>; for a time, date or number input use fill, and for a custom dropdown click it and then the option.)" : "");
+    } catch { return ""; }
+  }
+
+  private locateAll(page: Page, s: LocatorSpec): Locator {
+    const exact = s.exact ?? true;
+    return s.role ? page.getByRole(s.role as Parameters<Page["getByRole"]>[0], s.name ? { name: s.name, exact } : {})
+      : s.label ? page.getByLabel(s.label, { exact })
+      : s.placeholder ? page.getByPlaceholder(s.placeholder, { exact })
+      : s.testId ? page.getByTestId(s.testId)
+      : s.text ? page.getByText(s.text, { exact })
+      : page.locator(s.selector ?? "__none__");
+  }
+
   private async tree(page: Page, max = 6000): Promise<string> {
     try { return (await page.locator("body").ariaSnapshot({ timeout: 8000 })).slice(0, max); } catch { return ""; }
   }
@@ -306,6 +332,7 @@ export class PreviewBrowser {
     } catch (e) {
       isError = true;
       lines.push(`Failed: ${(e as Error).message.split("\n")[0]!.slice(0, 600)}`);
+      if (page && !page.isClosed() && input.locator) lines.push(await this.describeMatch(page, input.locator, input.action));
       if (page && !page.isClosed() && input.action !== "snapshot") {
         lines.push("The page as it is now (accessibility tree):\n" + await this.tree(page));
         image ??= await this.shot(page).catch(() => undefined);

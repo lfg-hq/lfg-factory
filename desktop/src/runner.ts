@@ -608,7 +608,7 @@ export function withRepoLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 export const WALKTHROUGH_PROMPT = [
   "The build is saved. Now show that the ticket works, the way a person would check it: in the browser.",
-  "1. Start the app from this folder, in the background, on a free port of its own (other tickets may be running apps on this computer; don't use the default port if it's taken). Use the project's own dev or start command and any local database or seed it needs for testing. Wait until it answers.",
+  "1. Start the app from this folder on a free port of its own (other tickets may be running apps on this computer; don't use the default port if it's taken). Use the project's own dev or start command and any local database or seed it needs for testing. Start it from a normal shell command with `nohup … > app.log 2>&1 &` and note its PID, not as a background task of yours: a background task that ends later would wake you after you've reported. Wait until it answers.",
   "2. Use the browser tool to open the app at its full http://localhost:<port> address. The browser is being recorded for the ticket's reviewers, so move at a person's pace: sign in if needed, then go through each acceptance criterion, doing what a user would do and checking what appears.",
   "3. Don't change the code now. If something doesn't work, record it as failed with what you saw.",
   "4. Stop the app you started.",
@@ -620,8 +620,14 @@ export const WALKTHROUGH_PROMPT = [
 ].join("\n");
 
 /** The JSON block at the end of the walkthrough reply. */
-export function parseWalkthrough(text: string | undefined): WalkthroughReport | null {
-  if (!text) return null;
+export function parseWalkthrough(text: string | string[] | undefined): WalkthroughReport | null {
+  // Every message the agent wrote, newest first: its report may not be its very last word
+  // (a notification can wake it again afterwards, and it answers that instead).
+  if (Array.isArray(text)) {
+    for (const t of [...text].reverse()) { const r = parseWalkthrough(t); if (r) return r; }
+    return null;
+  }
+  if (!text || !text.includes('"applicable"') && !text.includes('"checks"')) return null;
   const blocks = [...text.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)].map(m => m[1]!);
   const raw = blocks.at(-1) ?? text.slice(text.lastIndexOf('{"applicable"'));
   try {
@@ -659,6 +665,7 @@ async function recordWalkthrough(job: BuildJobOffer, active: ActiveJob, ctx: Tas
   rmSync(frames, { force: true });
   ctx.progress("Feature testing: starting the app on this computer and walking through the acceptance criteria in a recorded browser…");
   let report: WalkthroughReport | null = null;
+  const said: string[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
@@ -669,15 +676,15 @@ async function recordWalkthrough(job: BuildJobOffer, active: ActiveJob, ctx: Tas
           ELECTRON_RUN_AS_NODE: "1", LFG_BROWSER_ANY_LOCAL: "1", LFG_BROWSER_RECORD: frames,
           LFG_PREVIEW_PROFILE: join(dir, `profile-${job.id}`),
         } } },
-        onEvent: ctx.agentEvent,
+        onEvent: event => { if (event.type === "text") said.push(event.text); else if (event.type === "result" && event.text) said.push(event.text); ctx.agentEvent(event); },
         onSpawn: child => { active.child = child; },
       }).finally(() => { active.child = undefined; }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { active.child?.kill("SIGTERM"); reject(new Error("The walkthrough took longer than 15 minutes.")); }, 15 * 60_000); }),
     ]);
-    report = parseWalkthrough(result.summary) ?? { applicable: true, checks: [], reason: "The agent didn't report its checks." };
+    report = parseWalkthrough([...said, result.summary ?? ""]) ?? { applicable: true, checks: [], reason: "The agent didn't report its checks." };
   } catch (error) {
     if (active.cancelled) return;
-    report = { applicable: true, checks: [], reason: `The walkthrough didn't finish: ${(error as Error).message.slice(0, 300)}` };
+    report = parseWalkthrough(said) ?? { applicable: true, checks: [], reason: `The walkthrough didn't finish: ${(error as Error).message.slice(0, 300)}` };
   } finally {
     clearTimeout(timer);
     await stopAppsFrom(worktree, ctx.env).catch(() => {});

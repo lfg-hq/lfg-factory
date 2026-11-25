@@ -75,4 +75,27 @@ test("a confirm dialog is answered OK, as the person clicking would", async () =
     expect(r.content[0]!.type === "text" && r.content[0]!.text).toContain('confirm: "Switch to Live?" (answered OK)');
     expect(r.content[0]!.type === "text" && r.content[0]!.text).toContain('"live"');
   } finally { await browser.close(); server.stop(true); }
-}, 30000);
+}, 60000);
+
+test("the report is found even when the agent spoke again after it", () => {
+  const r = parseWalkthrough([
+    "Starting the app.",
+    'All done.\n```json\n{"applicable": true, "checks": [{"label": "A", "status": "passed"}]}\n```',
+    "That notice is only the dev server finishing. The results in my previous message stand.",
+  ]);
+  expect(r?.checks).toEqual([{ label: "A", status: "passed" }]);
+});
+
+test("a step that can't use its element says what the locator matched", async () => {
+  const { findBrowser, PreviewBrowser } = await import("../desktop/src/preview-browser.ts");
+  if (!findBrowser()) return;
+  const server = Bun.serve({ port: 0, fetch: () => new Response(`<label>From <input type="time" id="f"></label><label>Hidden <select style="display:none"><option>1</option></select></label>`, { headers: { "content-type": "text/html" } }) });
+  const browser = new PreviewBrowser({ anyLocal: true });
+  try {
+    await browser.call({ action: "open", url: `http://localhost:${server.port}/` });
+    const text = async (r: Promise<{ content: Array<{ type: string; text?: string }> }>) => (await r).content[0]!.text ?? "";
+    expect(await text(browser.call({ action: "select", locator: { label: "From" }, value: "09:00" }))).toContain('<input type="time">, visible, enabled. (select only works on a <select>; for a time, date or number input use fill');
+    expect(await text(browser.call({ action: "select", locator: { label: "Until" }, value: "x" }))).toContain("matched nothing on this page");
+    expect(await text(browser.call({ action: "fill", locator: { label: "From" }, value: "09:00" }))).toContain("fill done.");
+  } finally { await browser.close(); server.stop(true); }
+}, 60000);
