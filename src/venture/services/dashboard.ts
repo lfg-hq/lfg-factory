@@ -75,7 +75,9 @@ function spend(items: WorkItem[]) {
 // Coaching context for chat turns: where the venture stands right now.
 export async function ventureContext(conversationId: string) {
   const assessment = await latestAssessment(conversationId);
-  if (!assessment) return '';
+  const team = await teamMessagesFor(conversationId);
+  const teamNote = team.length ? '\nMessages LFG\'s team sent this founder directly (they appear in the founder\'s chat; build on them, never contradict them):\n' + JSON.stringify(team) : '';
+  if (!assessment) return teamNote;
   const r = recommendationOf(assessment);
   const [decision] = await db.select().from(ventureDecisions).where(eq(ventureDecisions.conversationId, conversationId)).orderBy(desc(ventureDecisions.createdAt)).limit(1);
   const tasks = await db.select().from(ventureTasks).where(eq(ventureTasks.assessmentId, assessment.id)).orderBy(asc(ventureTasks.position));
@@ -91,7 +93,14 @@ export async function ventureContext(conversationId: string) {
     whatLfgBuilt: work.map(w => ({ workType: w.workType, title: w.title, status: w.status, tokensSpent: w.tokensSpent, tokensBudgeted: w.tokensBudgeted })),
     latestResults: metrics,
     founderCommitments: tasks.map(t => ({ action: t.action, dueWeek: t.dueWeek, done: t.done })),
-  });
+  }) + teamNote;
+}
+
+// Recent messages from LFG's team, for the analyst's view of the venture.
+async function teamMessagesFor(conversationId: string) {
+  const rows = await db.select({ content: ventureMessages.content, createdAt: ventureMessages.createdAt }).from(ventureMessages)
+    .where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.role, 'team'))).orderBy(desc(ventureMessages.createdAt)).limit(5);
+  return rows.reverse().map(m => ({ sentAt: m.createdAt, text: m.content.slice(0, 2000) }));
 }
 
 async function latestMetrics(conversationId: string) {

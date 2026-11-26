@@ -7,6 +7,7 @@ import { hashPassword } from "better-auth/crypto";
 import { auth } from "../src/auth/index.ts";
 import authRoutes from "../src/venture/routes/auth.ts";
 import venture from "../src/venture/routes/api.ts";
+import ventureMcp from "../src/venture/routes/mcp.ts";
 import { db } from "../src/config/db.ts";
 import { env } from "../src/config/env.ts";
 import { users, accounts } from "../src/db/schema/users.ts";
@@ -14,7 +15,7 @@ import { ventureConversations, ventureMessages, ventureAssessments, ventureSourc
 import { fundRecommendation } from "./venture-assessment.fixture.ts";
 
 if (!process.env.VENTURE_TEST_ISOLATED) throw new Error("Use bun run test:venture for isolated databases.");
-const app = new Hono().route("/", authRoutes).route("/api/venture", venture);
+const app = new Hono().route("/", authRoutes).route("/api/venture", venture).route("/", ventureMcp);
 const origin = new URL(env.BETTER_AUTH_URL).origin;
 const fixtureIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
 const cookies: string[] = [];
@@ -170,6 +171,55 @@ test("LFG admins review every venture and record decisions; founders keep tasks 
     const ticked = await request(`/api/venture/tasks/${task!.id}`, 0, "PATCH", { done: true });
     expect(ticked.status).toBe(200); expect((await ticked.json()).task.done).toBe(true);
     expect((await (await request("/api/venture/dashboard", 0)).json()).ventures.find((v: any) => v.id === conversationId)?.tasks).toEqual({ total: 1, done: 1 });
+  } finally { env.VENTURE_ADMIN_EMAILS = previous; }
+});
+
+test("reviewers see founder emails and engagement, message founders, and use the Ventures MCP; founders can't", async () => {
+  const previous = env.VENTURE_ADMIN_EMAILS;
+  env.VENTURE_ADMIN_EMAILS = emails[1]!;
+  try {
+    // Engagement and email: reviewers only.
+    const own = await (await request("/api/venture/dashboard", 0)).json();
+    expect(own.ventures.find((v: any) => v.id === conversationId)?.engagement).toBeUndefined();
+    const all = await (await request("/api/venture/dashboard?scope=all", 1)).json();
+    const row = all.ventures.find((v: any) => v.id === conversationId);
+    expect(row.owner.email).toBe(emails[0]); expect(row.engagement.founderMessages).toBeGreaterThan(0);
+    expect((await (await request(`/api/venture/conversations/${conversationId}/overview`, 1)).json()).engagement.lastFounderMessageAt).toBeTruthy();
+
+    // Team messages: reviewer-only, same-origin, shown in the founder's conversation.
+    const path = `/api/venture/admin/conversations/${conversationId}/team-message`;
+    expect((await request(path, 0, "POST", { message: "x" })).status).toBe(403);
+    expect((await request(path, 1, "POST", { message: "x" }, "https://evil.example")).status).toBe(403);
+    expect((await request(path, 1, "POST", { message: "" })).status).toBe(400);
+    const sent = await request(path, 1, "POST", { message: "TEST FIXTURE from the LFG team", email: false });
+    expect(sent.status).toBe(201); expect((await sent.json()).emailed).toBe(false);
+    const founderChat = await (await request(`/api/venture/conversations/${conversationId}`, 0)).json();
+    expect(founderChat.messages.some((m: any) => m.role === "team" && m.content === "TEST FIXTURE from the LFG team")).toBe(true);
+    expect((await request(`/api/venture/admin/conversations/${conversationId}/advice`, 0, "POST", {})).status).toBe(403);
+
+    // MCP: tokens for reviewers only; bad, tampered or revoked tokens are refused.
+    expect((await request("/api/venture/admin/mcp-token", 0, "POST", {})).status).toBe(403);
+    const issued = await (await request("/api/venture/admin/mcp-token", 1, "POST", {})).json();
+    expect(issued.command).toContain("/mcp/ventures"); expect(issued.token).toStartWith("lfgv_");
+    const mcp = (token: string | null, body: unknown) => app.request(`${origin}/mcp/ventures`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    const call = (name: string, args: unknown = {}) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+    expect((await mcp(null, { jsonrpc: "2.0", id: 1, method: "tools/list" })).status).toBe(401);
+    expect((await mcp(issued.token.slice(0, -2) + "xx", { jsonrpc: "2.0", id: 1, method: "tools/list" })).status).toBe(401);
+    const init = await (await mcp(issued.token, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).json();
+    expect(init.result.serverInfo.name).toBe("lfg-ventures");
+    expect((await mcp(issued.token, { jsonrpc: "2.0", method: "notifications/initialized" })).status).toBe(202);
+    const tools = await (await mcp(issued.token, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
+    expect(tools.result.tools.map((t: any) => t.name)).toEqual(["venture_stats", "list_ventures", "get_venture", "advise_venture", "send_founder_message"]);
+    const stats = JSON.parse((await (await mcp(issued.token, call("venture_stats"))).json()).result.content[0].text);
+    expect(stats.ventures).toBeGreaterThan(0);
+    const listed = JSON.parse((await (await mcp(issued.token, call("list_ventures", { search: emails[0] }))).json()).result.content[0].text);
+    expect(listed.map((v: any) => v.id)).toContain(conversationId); expect(listed[0].founder.email).toBe(emails[0]);
+    const detail = JSON.parse((await (await mcp(issued.token, call("get_venture", { id: conversationId }))).json()).result.content[0].text);
+    expect(detail.transcript.some((m: any) => m.from === "team")).toBe(true);
+    expect((await (await mcp(issued.token, call("get_venture", { id: "nope" }))).json()).result.isError).toBe(true);
+    // Removing someone from the reviewer list revokes their token.
+    env.VENTURE_ADMIN_EMAILS = "other@example.org";
+    expect((await mcp(issued.token, call("venture_stats"))).status).toBe(401);
   } finally { env.VENTURE_ADMIN_EMAILS = previous; }
 });
 

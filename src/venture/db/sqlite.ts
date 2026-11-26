@@ -21,7 +21,8 @@ export const ventureConversations = sqliteTable("venture_conversation", {
 export const ventureMessages = sqliteTable("venture_message", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
-  role: text("role", { enum: ["user", "assistant", "system"] }).notNull(),
+  // team: a message LFG's reviewers sent the founder (services/admin.ts).
+  role: text("role", { enum: ["user", "assistant", "system", "team"] }).notNull(),
   content: text("content").notNull(),
   requestId: text("request_id").notNull(),
   status: text("status", { enum: ["started", "completed", "failed", "cancelled"] }).notNull().default("started"),

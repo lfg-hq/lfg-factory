@@ -46,6 +46,9 @@
   const DEAL = { equity: 'Equity', revenue_share: 'Revenue share', profit_share: 'Profit share' };
   const AGREEMENT = { awaiting_signatures: ['Awaiting signatures', 'warn'], changes_requested: ['Renegotiating', 'warn'], active: ['Active', 'good'] };
   const lfgStatus = v => v.deal && AGREEMENT[v.deal.status] ? AGREEMENT[v.deal.status] : v.decision ? DECISION[v.decision.decision] : v.assessment?.verdict ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted'];
+  // How the founder is engaging (reviewers only): from when they last wrote.
+  const ENGAGEMENT = { active: ['Talking now', 'good'], quiet: ['Gone quiet', 'warn'], dropped: ['Dropped off', 'bad'], not_started: ['Not started', 'muted'] };
+  const founderLine = e => !e ? null : e.lastFounderMessageAt ? `Founder last wrote ${ago(e.lastFounderMessageAt).toLowerCase()}${e.engagement === 'dropped' && e.lastSpeaker === 'analyst' ? ', after an analyst question' : ''}` : 'Founder hasn’t written yet';
   const metricValue = (name, v) => name === 'revenue_usd' ? usd(v) : name === 'conversion_rate' ? `${v}%` : compact(v);
 
   // ---- data and routing ---------------------------------------------------
@@ -128,6 +131,25 @@
   }
 
   // A small modal for messages and confirmations.
+  // Reviewers: a token and command that load the Ventures MCP into Claude, so they
+  // can ask about the pipeline (stats, verdicts, who dropped off) in plain words.
+  async function connectClaude() {
+    const dialog = el('dialog', '', 'vd-dialog');
+    const body = h('div', 'vd-new', el('h2', 'Ask Claude about your ventures'), el('p', 'Creating a private token…', 'vd-muted'));
+    dialog.append(body); dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog); dialog.showModal();
+    try {
+      const data = await api('/api/venture/admin/mcp-token', { method: 'POST', body: '{}' });
+      const code = el('pre', data.command, 'vd-code');
+      const copy = btn('Copy command', async () => { try { await navigator.clipboard.writeText(data.command); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select and copy it'; } }, 'vd-btn primary');
+      body.replaceChildren(el('h2', 'Ask Claude about your ventures'),
+        el('p', 'Run this in a terminal to add the LFG Ventures MCP to Claude Code. Then ask things like “how many ventures came in this week and what verdicts did they get?”, “who dropped off, and on what question?” or “how can I help the Calm Your Socks founder?”', 'vd-muted'),
+        code,
+        el('p', `The token works for you only, until ${date(data.expiresAt)}, and stops working if you’re removed as a reviewer. It reads founders’ emails and conversations, so keep it private. For Claude Desktop, add the same URL (${data.url}) with an Authorization header.`, 'vd-sub'),
+        h('div', 'vd-new-actions', btn('Done', () => dialog.close()), copy));
+    } catch (error) { body.append(el('p', errorText(error), 'vd-error'), h('div', 'vd-new-actions', btn('Close', () => dialog.close()))); }
+  }
+
   function notice(title, text, confirm) {
     const dialog = el('dialog', '', 'vd-dialog');
     const actions = h('div', 'vd-new-actions', btn(confirm ? 'Cancel' : 'OK', () => dialog.close(), confirm ? 'vd-btn' : 'vd-btn primary'));
@@ -145,6 +167,8 @@
     ['info', 'Needs info', v => (v.decision?.decision || v.assessment?.verdict) === 'needs_more_info'],
     ['closed', 'Declined', v => ['declined', 'prohibited', 'decline'].includes(v.decision?.decision || v.assessment?.verdict)],
     ['draft', 'Not assessed', v => !v.assessment],
+    ['quiet', 'Gone quiet', v => v.engagement?.engagement === 'quiet'],
+    ['dropped', 'Dropped off', v => v.engagement?.engagement === 'dropped'],
     ['archived', 'Archived', v => Boolean(v.archivedAt)],
   ];
   // Every filter but Archived shows only active ventures.
@@ -169,17 +193,20 @@
     const item = el('a', '', 'vd-row');
     item.href = url(v.id);
     item.onclick = e => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return; e.preventDefault(); go(v.id); };
-    const subtitle = [v.owner ? (v.owner.name || v.owner.email) : null, r?.summary || (r ? 'Assessed before verdicts existed' : 'In conversation with the analyst')].filter(Boolean).join(' · ');
+    const subtitle = r?.summary || (r ? 'Assessed before verdicts existed' : 'In conversation with the analyst');
+    const founder = v.owner ? h('span', 'vd-founder', v.owner.name ? el('span', v.owner.name) : null, v.owner.email ? el('span', v.owner.email, 'vd-email') : null) : null;
     const spendCell = v.tokensApproved ? h('div', 'vd-stack', el('strong', cost(p.tokensSpent)), h('div', 'vd-track', barOf(100 * p.tokensSpent / v.tokensApproved)), el('span', `${compact(p.tokensSpent)} of ${compact(v.tokensApproved)} tokens`, 'vd-sub'))
       : r?.recommendedTokens ? h('div', 'vd-stack', el('span', '—', 'vd-faint'), el('span', `${compact(r.recommendedTokens)} recommended`, 'vd-sub')) : el('span', '—', 'vd-faint');
     const progressCell = p.total ? h('div', 'vd-stack', el('strong', `Week ${p.week}`), el('span', `${p.shipped} of ${p.total} shipped`, 'vd-sub')) : el('span', '—', 'vd-faint');
     item.append(
-      h('div', 'vd-cell vd-cell-main', el('strong', v.title, 'vd-row-title'), el('span', subtitle, 'vd-sub vd-clamp')),
+      h('div', 'vd-cell vd-cell-main', el('strong', v.title, 'vd-row-title'), founder, el('span', subtitle, 'vd-sub vd-clamp')),
       h('div', 'vd-cell vd-stack', pill(lfgStatus(v)), v.deal ? el('span', DEAL[v.deal.structure], 'vd-sub') : r?.verdict ? el('span', `Analyst: ${VERDICT[r.verdict][0]}`, 'vd-sub') : null),
       h('div', 'vd-cell', spendCell),
       h('div', 'vd-cell', progressCell),
       h('div', 'vd-cell', v.revenueUsd !== null ? h('div', 'vd-stack', el('strong', usd(v.revenueUsd)), el('span', 'per month', 'vd-sub')) : el('span', '—', 'vd-faint')),
-      h('div', 'vd-cell vd-cell-end', el('span', ago(v.updatedAt), 'vd-sub')));
+      h('div', 'vd-cell vd-cell-end vd-stack', el('span', ago(v.updatedAt), 'vd-sub'),
+        v.engagement ? dot(ENGAGEMENT[v.engagement.engagement]) : null));
+    if (v.engagement) item.title = founderLine(v.engagement);
     return item;
   }
 
@@ -193,6 +220,7 @@
           const b = btn(label, () => { if (scope !== key) { scope = key; filter = 'all'; history.pushState(null, '', url()); load(); } }, `vd-seg-btn${scope === key ? ' active' : ''}`);
           b.setAttribute('aria-pressed', String(scope === key)); return b;
         })) : null,
+        isAdmin ? btn('Connect Claude', connectClaude, 'vd-btn') : null,
         btn('+ New venture', newVentureDialog, limit && !limit.canCreate ? 'vd-btn' : 'vd-btn primary')));
     if (!ventures.length) {
       root.replaceChildren(head, h('div', 'vd-empty',
@@ -607,6 +635,57 @@
     return form;
   }
 
+  // Reviewers: what's going on in this conversation and how LFG can move it
+  // forward, then a message to the founder from the LFG team.
+  function helpFounder(data, reload) {
+    const card = el('section', '', 'vd-card vd-help');
+    const question = el('input'); question.type = 'text'; question.maxLength = 2000;
+    question.placeholder = 'Optional: ask something specific about this venture';
+    question.setAttribute('aria-label', 'Question about this venture');
+    const result = el('div', '', 'vd-help-result');
+    const message = el('textarea'); message.rows = 6; message.maxLength = 4000; message.placeholder = 'Write to the founder as the LFG team…';
+    message.setAttribute('aria-label', 'Message to the founder');
+    const email = el('input'); email.type = 'checkbox'; email.checked = true;
+    const sent = el('p', '', 'vd-sub'); sent.setAttribute('role', 'status');
+    const send = el('button', 'Send to founder', 'vd-btn primary'); send.type = 'button';
+    const ask = el('button', 'How can I help?', 'vd-btn primary'); ask.type = 'button';
+    ask.onclick = async () => {
+      ask.disabled = true; ask.textContent = 'Reading the conversation…'; result.replaceChildren(el('p', 'This takes about 20 seconds.', 'vd-sub'));
+      try {
+        const { advice: a } = await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/advice`, { method: 'POST', body: JSON.stringify(question.value.trim() ? { question: question.value.trim() } : {}) });
+        const part = (label, text) => text ? h('div', 'vd-help-part', el('span', label, 'vd-stat-label'), el('p', text)) : null;
+        result.replaceChildren(
+          el('p', a.stage, 'vd-lead'),
+          part('Your question', a.answer), part('The founder', a.founderState), part('Stuck on', a.stuckOn),
+          h('div', 'vd-help-part', el('span', 'How you can help', 'vd-stat-label'), h('ol', 'vd-steps', ...a.howToHelp.map(x => el('li', x)))),
+          part('Steer the analyst', a.analystSteer));
+        if (!message.value.trim() || message.dataset.suggested === 'yes') { message.value = a.founderMessage; message.dataset.suggested = 'yes'; }
+      } catch (error) { result.replaceChildren(el('p', errorText(error), 'vd-error')); }
+      finally { ask.disabled = false; ask.textContent = 'Ask again'; }
+    };
+    message.oninput = () => { message.dataset.suggested = 'no'; };
+    send.onclick = () => {
+      const text = message.value.trim();
+      if (!text) { sent.textContent = 'Write a message first.'; message.focus(); return; }
+      notice('Send this to the founder?', `It appears in their chat as a message from the LFG team${email.checked && data.owner?.email ? `, and is emailed to ${data.owner.email}` : ''}. The analyst will see it too.`, { label: 'Send', run: async () => {
+        send.disabled = true; sent.textContent = 'Sending…';
+        try {
+          const r = await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/team-message`, { method: 'POST', body: JSON.stringify({ message: text, email: email.checked }) });
+          message.value = ''; message.dataset.suggested = 'no';
+          sent.textContent = r.emailed ? 'Sent, and emailed to the founder.' : 'Sent to the founder’s chat.';
+        } catch (error) { sent.textContent = errorText(error); }
+        finally { send.disabled = false; }
+      } });
+    };
+    card.append(el('h2', 'Help this founder'),
+      el('p', [founderLine(data.engagement), data.engagement ? `${data.engagement.founderMessages} message${data.engagement.founderMessages === 1 ? '' : 's'} from them` : null].filter(Boolean).join(' · '), 'vd-sub'),
+      question, ask, result,
+      h('div', 'vd-help-send', el('span', 'Message from the LFG team', 'vd-stat-label'), message,
+        h('label', 'vd-check', email, el('span', data.owner?.email ? `Also email ${data.owner.email}` : 'Also email the founder')),
+        h('div', 'vd-help-actions', send), sent));
+    return card;
+  }
+
   function transcript(data, sources) {
     const box = h('details', 'vd-card vd-transcript', el('summary', 'Conversation transcript'));
     let fetched = false;
@@ -616,7 +695,8 @@
       try {
         const { messages } = await api(`/api/venture/conversations/${encodeURIComponent(data.conversation.id)}`);
         body.replaceChildren(); body.className = 'vd-messages';
-        for (const m of messages.filter(m => m.content)) {
+        for (const m of messages.filter(m => m.content && m.role !== 'system')) {
+          if (m.role === 'team') { body.append(h('div', 'va-message team', el('span', `LFG team · ${date(m.createdAt)}`, 'va-team-label'), el('p', m.content))); continue; }
           const bubble = el('div', m.role === 'user' ? m.content : '', `va-message ${m.role === 'user' ? 'user' : ''}`);
           if (m.role !== 'user') window.ventureMarkdown ? window.ventureMarkdown.into(bubble, m.content, sources) : (bubble.textContent = m.content);
           body.append(bubble);
@@ -643,7 +723,10 @@
       const tags = h('div', 'vd-head-tags',
         data.decision ? pill(DECISION[data.decision.decision]) : pill(r ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted']),
         r ? dot(VERDICT[r.verdict]) : null, r ? el('span', `Analyst${r.tier ? ` · ${TIER[r.tier]}` : ''}`, 'vd-sub') : null,
-        el('span', [data.owner ? (data.owner.name || data.owner.email) : null, data.assessment ? `Assessment v${data.assessment.version}, ${date(data.assessment.createdAt)}` : null].filter(Boolean).join(' · '), 'vd-sub'));
+        data.owner?.name ? el('span', data.owner.name, 'vd-sub') : null,
+        data.owner?.email ? link(data.owner.email, `mailto:${data.owner.email}`, 'vd-email-link') : null,
+        data.engagement ? dot(ENGAGEMENT[data.engagement.engagement]) : null,
+        data.assessment ? el('span', `Assessment v${data.assessment.version}, ${date(data.assessment.createdAt)}`, 'vd-sub') : null);
       const archived = Boolean(data.conversation.archivedAt), canManage = data.isOwner || isAdmin, title = data.conversation.title;
       const archive = async to => {
         try { await api(`/api/venture/conversations/${encodeURIComponent(id)}/archive`, { method: 'POST', body: JSON.stringify({ archived: to }) }); await reload(); }
@@ -671,6 +754,7 @@
         }
         main.append(market(a, sources), founderFit(a, sources), gtm(a, sources), card('Risks and uncertainties', claims(a.uncertainties, sources)));
       }
+      if (isAdmin) side.append(helpFounder(data, reload));
       if (isAdmin && (scope === 'all' || !data.isOwner)) side.append(decisionForm(data, r, reload));
       if (r) side.append(todos(data), card('Next steps', h('ol', 'vd-steps', ...r.nextSteps.map(s => el('li', s)))));
       if (a?.missingInputs.length) side.append(card('Missing inputs', h('ul', 'vd-plain', ...a.missingInputs.map(m => el('li', m)))));

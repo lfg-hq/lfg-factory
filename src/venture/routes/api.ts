@@ -11,6 +11,7 @@ import { connectDictation, transcribeDictation } from "../../services/dictation.
 import { AgreementFailure, requestChanges, respondToChanges, signAgreement } from "../services/agreements.ts";
 import { DEAL_STRUCTURES, dealTermsProblem } from "../services/assessment.ts";
 import { ventureAgreements } from "../db/schema.ts";
+import { adviseOnVenture, engagementFor, issueAdminToken, postTeamMessage } from "../services/admin.ts";
 
 import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../services/analyst.ts';
 
@@ -18,7 +19,7 @@ type Variables = { userId: string; requestId: string; isAdmin: boolean; viewer: 
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
-  c.req.path.includes('/dictation/') ? 'venture.dictation' : c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
+  c.req.path.includes('/dictation/') ? 'venture.dictation' : c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.endsWith('/advice') ? 'venture.admin.advice' : c.req.path.endsWith('/team-message') ? 'venture.admin.team_message' : c.req.path.endsWith('/mcp-token') ? 'venture.admin.mcp_token' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
   c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : c.req.path.endsWith("/archive") ? "venture.archive" : c.req.method === "DELETE" ? "venture.conversation.delete" : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
@@ -155,13 +156,17 @@ venture.post('/conversations/:id/assessment', async c => {
 venture.get('/dashboard', async c => {
   const all = c.req.query('scope') === 'all';
   if (all && !c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can see every founder.');
-  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), viewer: c.get('viewer'), ventureLimit: await ventureLimit(c.get('userId'), c.get('isAdmin')), usdPerMillionTokens: env.VENTURE_USD_PER_MILLION_TOKENS, requestId: c.get('requestId') });
+  let ventures: any[] = await dashboardList(c.get('userId'), all);
+  // Reviewers also see how each conversation is going: when the founder last wrote.
+  if (c.get('isAdmin')) { const seen = await engagementFor(ventures.map(v => v.id)); ventures = ventures.map(v => ({ ...v, engagement: seen.get(v.id) })); }
+  return c.json({ ventures, isAdmin: c.get('isAdmin'), viewer: c.get('viewer'), ventureLimit: await ventureLimit(c.get('userId'), c.get('isAdmin')), usdPerMillionTokens: env.VENTURE_USD_PER_MILLION_TOKENS, requestId: c.get('requestId') });
 });
 venture.get('/conversations/:id/overview', async c => {
   const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
   if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable. Select one from your dashboard.');
   const isOwner = conversation.userId === c.get('userId');
-  return c.json({ ...(await ventureOverview(conversation.id, c.get('isAdmin'))), isOwner, isAdmin: c.get('isAdmin'), requestId: c.get('requestId') });
+  const engagement = c.get('isAdmin') ? (await engagementFor([conversation.id])).get(conversation.id) : undefined;
+  return c.json({ ...(await ventureOverview(conversation.id, c.get('isAdmin'))), engagement, isOwner, isAdmin: c.get('isAdmin'), requestId: c.get('requestId') });
 });
 venture.patch('/tasks/:id', async c => {
   try {
@@ -225,6 +230,33 @@ venture.post('/admin/conversations/:id/metrics', async c => {
     const metric = await recordMetric(conversation.id, payload.data.name, payload.data.value, payload.data.note);
     return c.json({ metric, requestId: c.get('requestId') }, 201);
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+// Helping a founder: an AI read of where the conversation stands and what LFG
+// can do, then a message from the team into the founder's chat (and inbox).
+venture.post('/admin/conversations/:id/advice', async c => {
+  if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can ask for advice on a venture.');
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), true);
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
+  const payload = z.object({ question: z.string().trim().max(2000).optional() }).strict().safeParse(await boundedJson(c.req.raw, 4096));
+  if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_QUESTION', 'Ask a question of at most 2,000 characters, or leave it empty.');
+  try { return c.json({ advice: await adviseOnVenture(conversation.id, payload.data.question || undefined), requestId: c.get('requestId') }); }
+  catch { return ventureError(c.get('requestId'), 502, 'ADVICE_FAILED', 'The advice could not be generated. Retry in a moment.'); }
+});
+venture.post('/admin/conversations/:id/team-message', async c => {
+  if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can message founders.');
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), true);
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
+  const payload = z.object({ message: z.string().trim().min(1).max(4000), email: z.boolean().optional() }).strict().safeParse(await boundedJson(c.req.raw, 16384));
+  if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_MESSAGE', 'Write a message of at most 4,000 characters.');
+  const sent = await postTeamMessage(conversation.id, payload.data.message, { email: payload.data.email });
+  return c.json({ ...sent, requestId: c.get('requestId') }, 201);
+});
+// A token for the Ventures MCP, so a reviewer can ask Claude about the pipeline.
+venture.post('/admin/mcp-token', async c => {
+  if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can connect the Ventures MCP.');
+  const { token, expiresAt } = issueAdminToken(c.get('userId'));
+  const url = `${(env.APP_URL || 'https://lfg.run').replace(/\/$/, '')}/mcp/ventures`;
+  return c.json({ token, expiresAt, url, command: `claude mcp add --transport http lfg-ventures ${url} --header "Authorization: Bearer ${token}"`, requestId: c.get('requestId') }, 201);
 });
 // Agreements: both sides sign; the founder may ask for changes first, and LFG
 // answers manually with revised terms or a reply.

@@ -151,6 +151,12 @@
     for (const source of data.sources || []) { addSource(source); if (!byTurn.has(source.turnId)) byTurn.set(source.turnId, []); byTurn.get(source.turnId).push(source); }
     for (const msg of data.messages) {
       if (msg.role === 'assistant' && msg.status === 'completed' && /^Saved assessment version \d+/.test(msg.content)) { content.append(savedNotice(id)); continue; }
+      if (msg.role === 'team') {
+        const note = element('div', '', 'va-message team');
+        note.append(element('span', 'Message from the LFG team', 'va-team-label'), element('p', msg.content));
+        content.append(note); continue;
+      }
+      if (msg.role === 'system') continue;
       const bubble = element('div', msg.role === 'user' ? msg.content : '', `va-message ${msg.role === 'user' ? 'user' : ''}`);
       if (msg.role !== 'user') markdown(bubble, msg.content);
       if (msg.role === 'assistant' && msg.status !== 'completed') {
