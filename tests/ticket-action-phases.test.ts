@@ -83,3 +83,20 @@ test('a follow-up sent to a built ticket is build work, not part of the earlier 
  expect(p[0].rows.map((r:any)=>r.message)).toEqual(['Starting Pi build','Editing src/a.ts','Chat follow-up','Refreshing ticket from epic/e1…','Editing src/test-call.ts']);
  expect(p[1].rows.length).toBe(2);
 });
+test('summary reads the latest automated checks and walkthrough from the log rows',()=>{
+ const summary=(globalThis as any).TicketActionPhases.summary;
+ const old=['[Validation] Validation check: ✕ Tests (`npm test`): failed — 3 failing','[Validation] ❌ Checks failed on Mac: Tests.'];
+ const s=summary(rows(...old,
+  '[Validation] Validation check: ✓ Tests (`npm test`): passed — 143 of 148 pass',
+  '[Validation] Validation check: ⚠ Lint (`npm run lint`): fails the same way without this ticket — 3 errors',
+  '[Validation] Validation check: ✓ Build: passed',
+  '[Validation] ✅ Validation passed on Mac: 2 of 3 checks passed; Lint already failed before this ticket.',
+  'Feature testing failed on Mac: 3 of 4 acceptance checks confirmed.\n\n- Admin switches to Live: stayed in Test\n\n[Watch recording](/uploads/ticket-tests/abc-1/def-2/recording.mp4)'));
+ expect(s.checks).toEqual([
+  {name:'Tests',command:'npm test',status:'passed',detail:'143 of 148 pass'},
+  {name:'Lint',command:'npm run lint',status:'preexisting',detail:'3 errors'},
+  {name:'Build',command:'',status:'passed',detail:''}]);
+ expect(s.walkthrough).toMatchObject({status:'failed',passed:3,total:4,failures:['Admin switches to Live: stayed in Test'],url:'/uploads/ticket-tests/abc-1/def-2',video:true});
+ expect(summary(rows(...old,'Starting ticket build')).checks).toEqual([]);
+ expect(summary(rows('Feature testing not applicable: no UI')).walkthrough.status).toBe('not-applicable');
+});

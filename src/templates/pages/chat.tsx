@@ -287,6 +287,7 @@ export function ChatPage({
           <span style="flex:1;"></span>
           <button id="ta-delete" title="Delete this ticket" style="height:32px;width:34px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);font-size:12px;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-trash"></i></button>
         </div>
+        <button id="ta-testbar" type="button" title="Open this ticket's test report"></button>
         <style>
           #ta-tabs { display:flex; gap:2px; padding:0 12px; flex:none; border-bottom:1px solid var(--border-color,#2a2a2a); background:var(--card-bg,#141414); }
           .ta-tab { padding:9px 13px; border:none; background:transparent; color:var(--text-secondary,#9ca3af); font-size:12.5px; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; align-items:center; gap:6px; }
@@ -594,8 +595,8 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js?v=20261124-doc-toolbar"></script>
   <script src="/public/js/document-comments.js?v=20261124-highlights"></script>
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
-<script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261126-test-report" />
+<script src="/public/js/ticket-action-phases.js?v=20261126-test-report"></script>
 <script src="/public/js/preview-tab.js?v=20261121-one-link"></script>
     <script src="/public/js/ticket-agent.js?v=20261124-sleek-log"></script>
   <script src="/public/js/workspace-status.js?v=20261121-icons-more"></script>

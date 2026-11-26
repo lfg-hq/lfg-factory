@@ -47,6 +47,57 @@
     if (!buildStarted && (ticket?.githubCommitSha || ticket?.github_commit_sha || rows.some(r => /Retrying validation of saved commit|Validation passed.*saved commit/.test(String(r.message || '').replace(/\*\*/g, ''))))) phases[0].status = 'saved';
     return phases;
   }
+  // What a build's checks found, read from its log rows: the automated checks a computer
+  // build reports ("Validation check: ✓ Tests (`npm test`): passed — 143 of 148…") and the
+  // latest acceptance walkthrough ("Feature testing passed/failed/not applicable …").
+  const BUILD_START = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket|Refreshing ticket from )/i;
+  const CHECK_ROW = /^Validation check: ([✓✕⚠]) (.+?)(?: \(`([^`]*)`\))?: (passed|failed|fails the same way without this ticket)(?: — ([\s\S]*))?$/;
+  const plain = row => String(row.message || '').replace(/^\[(Validation|Feature testing)\]\s*/, '').replace(/\*\*/g, '').trim();
+  function summary(rows) {
+    let checks = [], closed = false, walkthrough = null;
+    for (const row of rows) {
+      const text = plain(row);
+      if (BUILD_START.test(text)) { checks = []; closed = false; walkthrough = null; continue; }
+      const m = text.match(CHECK_ROW);
+      if (m) {
+        if (closed) { checks = []; closed = false; }
+        checks.push({ name: m[2], command: m[3] || '', status: m[4] === 'passed' ? 'passed' : m[4] === 'failed' ? 'failed' : 'preexisting', detail: (m[5] || '').trim() });
+        continue;
+      }
+      if (/^(✅\s*Validation passed on|❌\s*Checks failed on)/.test(text)) { closed = true; continue; }
+      const w = text.match(/^Feature testing (passed|failed|not applicable)\b/i);
+      if (w) {
+        const link = text.match(/\((\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+)\/(recording\.mp4|status\.json)\)/);
+        const counts = text.match(/(\d+) of (\d+) acceptance checks/) || text.match(/all (\d+) acceptance checks/);
+        const total = counts ? +(counts[2] || counts[1]) : 0;
+        const failures = text.split('\n').filter(line => /^- /.test(line)).map(line => line.slice(2).trim());
+        walkthrough = {
+          status: w[1].toLowerCase() === 'not applicable' ? 'not-applicable' : w[1].toLowerCase(),
+          passed: counts ? +counts[1] : 0, total,
+          reason: text.split('\n')[0].replace(/^Feature testing (passed|failed|not applicable)( on [^:]+)?:?\s*/i, ''),
+          failures, url: link ? link[1] : null, video: !!link && link[2] === 'recording.mp4'
+        };
+      }
+    }
+    return { checks, walkthrough };
+  }
+  const CHECK_LABEL = { passed: 'Passed', failed: 'Failed', preexisting: 'Already failing' };
+  function checksTable(checks) {
+    const list = document.createElement('ul'); list.className = 'auto-checks'; list.setAttribute('aria-label', 'Automated checks');
+    for (const check of checks) {
+      const item = document.createElement('li'); item.dataset.status = check.status;
+      const state = document.createElement('span'); state.className = 'auto-check-state';
+      state.textContent = ({ passed: '✓', failed: '✕', preexisting: '⚠' })[check.status] + ' ' + CHECK_LABEL[check.status];
+      if (check.status === 'preexisting') state.title = 'It fails the same way without this ticket, so this ticket did not cause it.';
+      const main = document.createElement('div'); main.className = 'auto-check-main';
+      const name = document.createElement('strong'); name.textContent = check.name; main.append(name);
+      if (check.detail) { const d = document.createElement('p'); d.textContent = check.detail; main.append(d); }
+      else if (check.status === 'preexisting') { const d = document.createElement('p'); d.textContent = 'Fails the same way without this ticket.'; main.append(d); }
+      if (check.command) { const c = document.createElement('code'); c.textContent = check.command; c.title = 'The command that ran'; main.append(c); }
+      item.append(state, main); list.append(item);
+    }
+    return list;
+  }
   // Recorder evidence lives only under /uploads/ticket-tests/; never render other URLs from status data.
   function evidenceImage(url) {
     return typeof url === 'string' && /^\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+\/(?:(?:step|shot)-[0-9]+|failure)\.jpg$/.test(url);
@@ -109,6 +160,8 @@
     const checkIds = ['validation', 'feature-testing'];
     const tabOf = id => checkIds.includes(id) ? 'checks' : id;
     const checkPhases = phases.filter(phase => checkIds.includes(phase.id));
+    const report = summary(checkPhases.flatMap(phase => phase.rows));
+    const automated = report.checks;
     const running = ticket && /^(executing|queued|stopping)$/.test(ticket.queueStatus || '');
     const combined = list => {
       const statuses = list.map(phase => phase.status);
@@ -212,9 +265,9 @@
       let logHost=body;
       let showLogs=null;
       if(phase.id==='validation'&&displayRows.length){
-        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Startup logs';details.append(summary);
+        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent=automated.length?'Logs':'Startup logs';details.append(summary);
         // A failed validation opens by default: the reason lives in these rows.
-        details.open=diagnosticsOpen.has(key)?diagnosticsOpen.get(key):phase.status==='error';
+        details.open=diagnosticsOpen.has(key)?diagnosticsOpen.get(key):phase.status==='error'&&!automated.length;
         details.addEventListener('toggle',()=>diagnosticsOpen.set(key,details.open));const logs=document.createElement('div');details.append(logs);body.append(details);logHost=logs;
       }
       if(phase.id==='feature-testing' && displayRows.length){
@@ -264,6 +317,7 @@
           stage.append(status,viewport);content.append(details,stage);
           const enlarge=document.createElement('button');enlarge.type='button';enlarge.className='feature-enlarge';enlarge.textContent='Focus browser';enlarge.onclick=()=>{const expanded=card.classList.toggle('browser-expanded');enlarge.textContent=expanded?'Show assertions':'Focus browser';enlarge.setAttribute('aria-expanded',String(expanded));};card.append(content);
           const expandedChecks=new Set();
+          let openedFailures=false;
 
           owner.append(card);
           let misses=0;
@@ -278,6 +332,8 @@
               const focusedCheck=checklist.contains(document.activeElement)?document.activeElement.dataset.check:null;
               checklist.replaceChildren();
               const checks=state.checks||[];
+              // A failed assertion is what the reader came for: open it once, then leave it to them.
+              if(!openedFailures&&state.status!=='working'){openedFailures=true;checks.forEach((c,i)=>{if(c.status==='failed')expandedChecks.add(String(i)+':'+c.label);});}
               const counts=document.createElement('li');counts.className='feature-checklist-note';counts.textContent=checks.filter(c=>c.status==='passed').length+' of '+checks.length+' assertions confirmed';checklist.append(counts);
               for(const [index,check] of checks.entries()){
                 const outcome=state.status!=='working' && ['pending','working'].includes(check.status)?'not run':check.status;
@@ -290,7 +346,7 @@
                 for(const [label,value] of [['Expected',check.expected],['Observed',check.actual],['Failure',check.error]])if(value){const p=document.createElement('p');const strong=document.createElement('strong');strong.textContent=label+': ';p.append(strong,document.createTextNode(value));evidence.append(p);}
                 if(evidenceImage(check.screenshot))evidence.append(screenshotLink(check.screenshot,'Screenshot: '+check.label));
                 if(check.steps?.length){const steps=document.createElement('ol');steps.className='assertion-steps';for(const step of check.steps){const li=document.createElement('li');li.textContent=({passed:'✓',failed:'✕',working:'…'})[step.status]+' '+step.label;if(step.target){const target=document.createElement('small');target.textContent=step.target;li.append(target);}if(step.error){const failure=document.createElement('p');failure.textContent=step.error;li.append(failure);}if(evidenceImage(step.screenshot))li.append(screenshotLink(step.screenshot,'Screenshot: '+step.label));steps.append(li);}evidence.append(steps);}
-                else {const p=document.createElement('p');p.textContent=outcome==='pending'?'Steps will appear when this assertion starts.':outcome==='not run'?'This assertion was not completed before the run ended.':'Step details were not saved for this assertion.';evidence.append(p);}
+                else if(!check.expected&&!check.actual&&!check.error){const p=document.createElement('p');p.textContent=outcome==='pending'?'Steps will appear when this assertion starts.':outcome==='not run'?'This assertion was not completed before the run ended.':'Step details were not saved for this assertion.';evidence.append(p);}
                 evidence.hidden=!expandedChecks.has(assertion.dataset.check);
                 evidence.id='check-evidence-'+live[1].split('/').pop()+'-'+index;assertion.setAttribute('aria-controls',evidence.id);
                 assertion.onclick=()=>{const key=assertion.dataset.check;if(expandedChecks.has(key))expandedChecks.delete(key);else expandedChecks.add(key);evidence.hidden=!expandedChecks.has(key);assertion.setAttribute('aria-expanded',String(!evidence.hidden));};
@@ -354,6 +410,20 @@
         : overall === 'error' ? ['error', 'Checks failed', failure ? text(failure).replace(/^(Feature testing failed|Validation failed|Checks failed)\.?\s*/i, '').slice(0, 240) : 'See the step that failed below.']
         : overall === 'working' ? ['working', 'Checks are running', 'The app is starting and the feature is being exercised in a browser.']
         : ['pending', 'Checks have not run', 'They run after the build is saved.'];
+      // Once the results are in, the banner says what they were, not just pass or fail.
+      const walk = report.walkthrough;
+      if (!skipped && overall !== 'working' && (automated.length || walk)) {
+        const bad = automated.filter(c => c.status === 'failed');
+        const already = automated.filter(c => c.status === 'preexisting');
+        const failedWalk = walk && walk.status === 'failed';
+        const parts = [];
+        if (automated.length) parts.push('Automated checks: ' + automated.filter(c => c.status === 'passed').length + ' of ' + automated.length + ' passed' + (already.length ? ' (' + already.length + ' already failing before this ticket)' : ''));
+        if (walk) parts.push(walk.status === 'not-applicable' ? 'Walkthrough: nothing to check in a browser' : walk.total ? 'Walkthrough: ' + walk.passed + ' of ' + walk.total + ' acceptance criteria confirmed' : 'Walkthrough: ' + (walk.reason || walk.status));
+        const failedNames = bad.map(c => c.name).concat(failedWalk ? walk.failures.map(f => f.split(':')[0]) : []);
+        verdict[0] = bad.length || failedWalk ? 'error' : 'done';
+        verdict[1] = bad.length || failedWalk ? 'Some checks failed' : 'All checks passed';
+        verdict[2] = parts.join(' · ') + (failedNames.length ? '\nFailed: ' + failedNames.join('; ').slice(0, 300) : '');
+      }
       const banner = document.createElement('div'); banner.className = 'checks-banner'; banner.dataset.state = verdict[0]; banner.setAttribute('role', 'status');
       const title = document.createElement('strong'); title.textContent = verdict[1];
       const detail = document.createElement('span'); detail.textContent = verdict[2];
@@ -364,9 +434,19 @@
         const step = document.createElement('section'); step.className = 'checks-step';
         const head = document.createElement('header');
         const [state, label] = stepState(phase); step.dataset.state = state;
-        const name = document.createElement('strong'); name.textContent = (++number) + '. ' + (phase.id === 'validation' ? 'App starts' : 'Feature walkthrough');
-        const pill = document.createElement('span'); pill.className = 'checks-pill'; pill.textContent = label;
-        head.append(name, pill); step.append(head);
+        const auto = phase.id === 'validation' && automated.length;
+        const name = document.createElement('strong'); name.textContent = (++number) + '. ' + (phase.id === 'validation' ? (auto ? 'Automated checks' : 'App starts') : 'Acceptance walkthrough');
+        const pill = document.createElement('span'); pill.className = 'checks-pill';
+        if (auto) {
+          const failed = automated.some(c => c.status === 'failed');
+          step.dataset.state = failed ? 'error' : 'done';
+          pill.textContent = automated.filter(c => c.status === 'passed').length + ' of ' + automated.length + ' passed';
+        } else if (phase.id === 'feature-testing' && walk && walk.total && phase.status !== 'working') pill.textContent = walk.passed + ' of ' + walk.total + ' confirmed';
+        else pill.textContent = label;
+        const hint = document.createElement('small'); hint.className = 'checks-step-hint';
+        hint.textContent = phase.id === 'validation' ? (auto ? 'Tests, typecheck, lint and build, run on the computer that built it.' : 'The app is started from the saved code.') : 'The agent starts the app and tries each acceptance criterion in a recorded browser.';
+        head.append(name, pill); step.append(head, hint);
+        if (auto) step.append(checksTable(automated));
         if (phase.id === 'feature-testing') step.append(dock);
         step.append(bodies[phases.indexOf(phase)]);
         checksView.append(step);
@@ -406,5 +486,7 @@
     else if (visible && visible !== checksView) visible.scrollTop = visible.scrollHeight;
 
   }
-  root.TicketActionPhases = { group, render, load, latestFeatureRunCompleted };
+  // Open a ticket's Checks next time it renders (the test summary links straight to it).
+  function choose(key, tab) { choices.set(key, tab); }
+  root.TicketActionPhases = { group, render, load, latestFeatureRunCompleted, summary, choose };
 })(typeof window === 'undefined' ? globalThis : window);

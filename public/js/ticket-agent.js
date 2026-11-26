@@ -609,6 +609,7 @@
     ticketId = id;
     curMeta = meta || null;
     currentLogRows = [];
+    { const tb = $("ta-testbar"); if (tb) tb.style.display = "none"; }
     curKey = key || "";
     editing = false;
     const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
@@ -776,8 +777,42 @@
       const holder = document.createElement('div'); holder.innerHTML = renderRow(row);
       return holder.firstElementChild;
     }, `/api/projects/${PID()}/tickets/${ticketId}/logs`, loadLog);
+    renderTestBar(rows);
     for (const id of expanded) { const body = document.getElementById(id); if (body) body.style.display = "block"; }
     if (atBottom) area.scrollTop = area.scrollHeight;
+  }
+
+  // One line under the ticket's actions: what its checks found, whatever tab is open.
+  // Clicking it opens Actions → Checks, the full report.
+  function renderTestBar(rows) {
+    const bar = $("ta-testbar");
+    if (!bar) return;
+    const s = window.TicketActionPhases.summary ? window.TicketActionPhases.summary(rows) : { checks: [] };
+    const w = s.walkthrough;
+    if (!s.checks.length && !w) { bar.style.display = "none"; return; }
+    const chip = (status, text, title) => { const c = document.createElement("span"); c.className = "tb-chip"; c.dataset.status = status; c.textContent = text; if (title) c.title = title; return c; };
+    const icon = { passed: "✓", failed: "✕", preexisting: "⚠" };
+    const failed = s.checks.some(c => c.status === "failed") || (w && w.status === "failed");
+    const label = document.createElement("span"); label.className = "tb-label";
+    label.innerHTML = '<i class="fas fa-vial" style="color:' + (failed ? "#f87171" : "#4ade80") + ';"></i>';
+    label.append(document.createTextNode(failed ? "Checks: some failed" : "Checks passed"));
+    const parts = [label];
+    for (const c of s.checks) parts.push(chip(c.status, icon[c.status] + " " + c.name, (c.status === "preexisting" ? "Already failing before this ticket. " : "") + (c.detail || "")));
+    if (w) {
+      const text = w.status === "not-applicable" ? "– Walkthrough not needed" : (w.status === "passed" ? "✓" : "✕") + " Walkthrough" + (w.total ? " " + w.passed + "/" + w.total : "") + (w.video ? " · ▶ video" : "");
+      parts.push(chip(w.status === "not-applicable" ? "na" : w.status, text, w.failures.join("\n")));
+    }
+    const open = document.createElement("span"); open.className = "tb-open"; open.textContent = "View report →";
+    parts.push(open);
+    bar.replaceChildren(...parts);
+    bar.style.display = "flex";
+    bar.onclick = () => {
+      window.TicketActionPhases.choose("chat:" + ticketId, "checks");
+      rememberTab("actions");
+      switchTicketTab("actions");
+      renderAll(currentLogRows);
+      const area = $("ta-log"); const view = area && area.querySelector(".checks-view"); if (view) view.scrollTop = 0;
+    };
   }
 
   // "$ python3 - <<'EOF'" says nothing about what ran: name the kind of script instead.
