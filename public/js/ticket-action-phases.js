@@ -154,7 +154,31 @@
   const anchors = new Map();
   // Remember whether the reader opened or closed diagnostics; refreshes must not undo it.
   const diagnosticsOpen = new Map();
+  // Redrawing moves the walkthrough video, and a browser pauses a video it moves and drops it
+  // out of fullscreen. While one is playing or fullscreen, the redraw waits for it.
+  const waiting = new WeakMap();
+  function mediaInUse(area) {
+    const full = document.fullscreenElement || document.webkitFullscreenElement;
+    return Array.from(area.querySelectorAll('video')).find(v => (!v.paused && !v.ended) || (full && (full === v || full.contains(v))));
+  }
   function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
+    const busy = mediaInUse(area);
+    if (busy) {
+      waiting.set(area, () => render(area, rows, ticket, key, renderRow, historyUrl, refresh));
+      if (!busy.dataset.redrawHooked) {
+        busy.dataset.redrawHooked = '1';
+        const flush = () => {
+          if (mediaInUse(area) || !waiting.has(area)) return;
+          const next = waiting.get(area); waiting.delete(area); next();
+        };
+        busy.addEventListener('pause', flush);
+        busy.addEventListener('ended', flush);
+        document.addEventListener('fullscreenchange', () => setTimeout(flush, 0));
+        document.addEventListener('webkitfullscreenchange', () => setTimeout(flush, 0));
+      }
+      return;
+    }
+    waiting.delete(area);
     const liveCards=new Map(Array.from(area.querySelectorAll('.feature-live[data-live-url]'),card=>[card.dataset.liveUrl,card]));
     const previous = area.querySelector('.checks-view:not([hidden])') || area.querySelector('.ticket-phase-body:not([hidden])');
     const scroll = previous ? { top:previous.scrollTop, left:previous.scrollLeft, bottom:previous.scrollHeight-previous.scrollTop-previous.clientHeight<40 } : null;

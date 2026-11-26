@@ -697,12 +697,22 @@
     const requestedTicket = ticketId;
     try {
       const rows = await window.TicketActionPhases.load(`/api/projects/${PID()}/tickets/${ticketId}/logs`);
-      if (ticketId === requestedTicket && Array.isArray(rows)) { renderAll(rows); applyAutoTab(rows.length); }
+      if (ticketId !== requestedTicket || !Array.isArray(rows)) return;
+      // Live rows arrive over the socket; a fetch that brings nothing new redraws nothing.
+      const key = logKey(rows);
+      if (key !== lastLogKey || !$("ta-log")?.childElementCount) renderAll(rows);
+      applyAutoTab(rows.length);
     } catch (_) { /* keep last render — a later poll retries the auto-tab */ }
   }
 
   // Stable job identities fold polling snapshots without hiding distinct commands/retries.
   let currentLogRows = [];
+  let lastLogKey = "";
+  function logKey(rows) {
+    const last = rows[rows.length - 1];
+    let output = 0; for (const r of rows) output += String(r.output || "").length;
+    return rows.length + "|" + (last ? last.id + "|" + String(last.message || "").length : "") + "|" + output + "|" + (curMeta ? [curMeta.status, curMeta.queueStatus, curMeta.validationEnabled, curMeta.featureTestingEnabled].join(",") : "");
+  }
   function groupOperations(rows) {
     const result = [], jobs = new Map();
     for (const row of rows) {
@@ -771,6 +781,7 @@
     const area = $("ta-log");
     if (!area) return;
     currentLogRows = rows;
+    lastLogKey = logKey(rows);
     const expanded = new Set(Array.from(area.querySelectorAll(".ta-cmd-body")).filter(el => el.style.display !== "none").map(el => el.id));
     const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
     window.TicketActionPhases.render(area, groupOperations(rows), curMeta, 'chat:' + ticketId, row => {
@@ -1021,7 +1032,10 @@
       setBuildUI();
       loadLog();
     } else if (msg.type === "ticket_log_output") {
-      loadLog(); // authoritative refresh (folds tool output into its row)
+      // Fold the tool's output into its row where it is, without refetching the whole log.
+      const row = currentLogRows.find(r => r.id && r.id === msg.logId);
+      if (row && typeof msg.output === "string") { row.output = msg.output; renderAll(currentLogRows); }
+      else loadLog();
     }
   }
   async function refreshTicketState() {
@@ -1039,7 +1053,9 @@
     } catch (_) {}
   }
   window.addEventListener('focus', () => { if (ticketId) refreshTicketState(); });
-  function startPoll() { stopPoll(); timer = setInterval(() => { loadLog(); refreshTicketState(); if (activeTab === "tasks") loadTasks(true); }, 12000); } // WS is primary; this is a backstop
+  // The socket streams every new row; this slow backstop only catches a missed message,
+  // and redraws nothing unless the log actually changed.
+  function startPoll() { stopPoll(); timer = setInterval(() => { if (document.hidden) return; loadLog(); refreshTicketState(); if (activeTab === "tasks") loadTasks(true); }, 60000); }
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
   window.TicketAgentChat = { open, close, send, onWs, isOpen, isDocked: () => docked && isOpen(), attachScreenshot, stop: stopTicket };

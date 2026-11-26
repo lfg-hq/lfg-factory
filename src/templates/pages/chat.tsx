@@ -595,10 +595,10 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js?v=20261124-doc-toolbar"></script>
   <script src="/public/js/document-comments.js?v=20261124-highlights"></script>
   <script src="/public/js/artifacts.js?v=20261121-ticket-in-panel"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261126-not-checked" />
-<script src="/public/js/ticket-action-phases.js?v=20261126-not-checked"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261126-steady-video" />
+<script src="/public/js/ticket-action-phases.js?v=20261126-steady-video"></script>
 <script src="/public/js/preview-tab.js?v=20261121-one-link"></script>
-    <script src="/public/js/ticket-agent.js?v=20261126-not-checked"></script>
+    <script src="/public/js/ticket-agent.js?v=20261126-steady-video"></script>
   <script src="/public/js/workspace-status.js?v=20261121-icons-more"></script>
   <script src="/public/js/env-tab.js?v=20261121-one-restart"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
