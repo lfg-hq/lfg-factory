@@ -145,6 +145,8 @@ export async function dashboardList(userId: string, allFounders: boolean) {
       deal: deal ? { structure: deal.structure, status: deal.status, summary: termsSummary(deal, deal.tokensCommitted) } : null,
       revenueUsd: revenue.find(m => m.conversationId === conversation.id)?.value ?? null,
       tasks: { total: own.length, done: own.filter(t => t.done).length },
+      // What the founder still has to do, in order: shown up front so they can pick up where they left off.
+      openTasks: own.filter(t => !t.done).sort((x, y) => x.position - y.position).slice(0, 3).map(t => ({ id: t.id, action: t.action, dueWeek: t.dueWeek })),
     };
   });
 }

@@ -11,11 +11,11 @@ export const VentureDashboardPage = () => html`<!doctype html>
 <script>if (localStorage.getItem('lfg-theme') === 'dark') document.documentElement.classList.add('dark');</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/public/venture/analyst.css">
-<link rel="stylesheet" href="/public/venture/dashboard.css">
+<link rel="stylesheet" href="/public/venture/analyst.css?v=20261126-todos">
+<link rel="stylesheet" href="/public/venture/dashboard.css?v=20261126-todos">
 <script defer src="/public/js/marked.min.js"></script>
 <script defer src="/public/venture/markdown.js"></script>
-<script defer src="/public/venture/dashboard.js"></script></head>
+<script defer src="/public/venture/dashboard.js?v=20261126-todos"></script></head>
 <body class="vd-body">
 <header class="vd-bar">
 <a class="vd-brand" href="/"><span class="vd-logo" aria-hidden="true">${rocket}</span>LFG</a>

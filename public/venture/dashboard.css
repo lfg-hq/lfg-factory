@@ -343,12 +343,32 @@ a.vd-row:hover .vd-row .vd-track{width:100%;max-width:140px;height:5px;margin:3p
 .vd-help input[type=text],.vd-help textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px}
 .vd-help textarea{resize:vertical;line-height:1.55}
 .vd-help>.vd-btn{align-self:flex-start}
-.vd-help-result:empty{display:none}
-.vd-help-result{display:flex;flex-direction:column;gap:10px;padding:12px;background:var(--sunk);border:1px solid var(--line-soft);border-radius:10px}
-.vd-help-result .vd-lead{margin:0;font-weight:700;color:var(--ink)}
-.vd-help-part p{margin:2px 0 0;font-size:13px;color:var(--ink-2)}
-.vd-help-part .vd-steps{margin:4px 0 0;font-size:13px}
 .vd-help-send{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line-soft);padding-top:12px}
 .vd-check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
 .vd-help-actions{display:flex;justify-content:flex-end}
 .vd-code{margin:0;padding:12px;background:#0f172a;color:#e2e8f0;border-radius:8px;font-size:12px;white-space:pre-wrap;word-break:break-all;user-select:all}
+.vd-help-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.vd-chat-log{display:flex;flex-direction:column;gap:10px;max-height:560px;overflow:auto}
+.vd-chat-log:empty{display:none}
+.vd-chat-msg{font-size:13.5px;line-height:1.6;padding:10px 14px;border-radius:12px;max-width:92%;overflow-wrap:anywhere}
+.vd-chat-msg.user{align-self:flex-end;background:var(--accent-soft);color:var(--ink);border-radius:12px 12px 2px 12px;white-space:pre-wrap}
+.vd-chat-msg.agent{align-self:flex-start;background:var(--sunk);border:1px solid var(--line-soft);color:var(--ink-2);border-radius:12px 12px 12px 2px}
+.vd-chat-msg.agent.va-md p:last-of-type{margin-bottom:0}
+.vd-chat-actions{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.vd-link-btn{border:0;background:none;padding:0;font:inherit;font-size:12.5px;font-weight:700;color:var(--accent-ink);cursor:pointer}
+.vd-link-btn:hover{text-decoration:underline}
+.vd-chat-chips{display:flex;flex-wrap:wrap;gap:6px}
+.vd-chat-input{display:flex;gap:8px;align-items:flex-end}
+.vd-chat-input textarea{flex:1}
+
+/* ---- founders: open to-dos up front ---- */
+.vd-todos-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line-soft);padding-top:12px;margin-top:4px}
+.vd-pickup{display:flex;flex-direction:column;gap:14px;margin-bottom:18px;border-color:var(--accent-track);background:linear-gradient(180deg,var(--accent-soft),var(--panel) 70%)}
+.vd-pickup-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.vd-pickup-head h2{margin:0}
+.vd-pickup-venture+.vd-pickup-venture{border-top:1px solid var(--line-soft);padding-top:14px}
+.vd-pickup-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.vd-pickup-list{margin:8px 0 12px;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.vd-pickup-list li{line-height:1.45}
+.vd-pickup-list li .vd-sub{margin-left:8px}
+.vd-pickup-actions{display:flex;gap:8px;flex-wrap:wrap}

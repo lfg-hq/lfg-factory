@@ -48,6 +48,13 @@
   const lfgStatus = v => v.deal && AGREEMENT[v.deal.status] ? AGREEMENT[v.deal.status] : v.decision ? DECISION[v.decision.decision] : v.assessment?.verdict ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted'];
   // How the founder is engaging (reviewers only): from when they last wrote.
   const ENGAGEMENT = { active: ['Talking now', 'good'], quiet: ['Gone quiet', 'warn'], dropped: ['Dropped off', 'bad'], not_started: ['Not started', 'muted'] };
+  const ENGAGEMENT_HELP = {
+    active: 'The founder wrote in the last 2 days.',
+    quiet: 'Gone quiet: no message from the founder for 2 to 7 days (or longer, but they had the last word).',
+    dropped: 'Dropped off: the founder hasn’t written for over a week, and the analyst or LFG had the last word. They left mid-conversation.',
+    not_started: 'The founder opened a venture but hasn’t written yet.',
+  };
+  const engagementDot = e => { const d = dot(ENGAGEMENT[e.engagement]); d.title = ENGAGEMENT_HELP[e.engagement]; return d; };
   const founderLine = e => !e ? null : e.lastFounderMessageAt ? `Founder last wrote ${ago(e.lastFounderMessageAt).toLowerCase()}${e.engagement === 'dropped' && e.lastSpeaker === 'analyst' ? ', after an analyst question' : ''}` : 'Founder hasn’t written yet';
   const metricValue = (name, v) => name === 'revenue_usd' ? usd(v) : name === 'conversion_rate' ? `${v}%` : compact(v);
 
@@ -205,12 +212,25 @@
       h('div', 'vd-cell', progressCell),
       h('div', 'vd-cell', v.revenueUsd !== null ? h('div', 'vd-stack', el('strong', usd(v.revenueUsd)), el('span', 'per month', 'vd-sub')) : el('span', '—', 'vd-faint')),
       h('div', 'vd-cell vd-cell-end vd-stack', el('span', ago(v.updatedAt), 'vd-sub'),
-        v.engagement ? dot(ENGAGEMENT[v.engagement.engagement]) : null));
+        v.engagement ? engagementDot(v.engagement) : null));
     if (v.engagement) item.title = founderLine(v.engagement);
     return item;
   }
 
   const activeVentures = () => ventures.filter(v => !v.archivedAt);
+  // Founders: their open to-dos, front and centre, with a way straight back in.
+  function pickUp() {
+    const open = activeVentures().filter(v => v.openTasks?.length);
+    if (!open.length) return '';
+    return h('section', 'vd-card vd-pickup',
+      h('div', 'vd-pickup-head', el('h2', 'Pick up where you left off'), el('span', 'Your to-dos from the analyst', 'vd-sub')),
+      ...open.map(v => h('div', 'vd-pickup-venture',
+        h('div', 'vd-pickup-title', el('strong', v.title), el('span', `${v.tasks.done} of ${v.tasks.total} done`, 'vd-sub')),
+        h('ul', 'vd-pickup-list', ...v.openTasks.map(t => h('li', '', el('span', t.action), t.dueWeek !== null ? el('span', `Week ${t.dueWeek}`, 'vd-sub') : null))),
+        h('div', 'vd-pickup-actions',
+          btn('See all to-dos', () => go(v.id), 'vd-btn'),
+          link('Continue with the analyst', `/venture/chat?c=${encodeURIComponent(v.id)}`, 'vd-btn primary')))));
+  }
   function renderList() {
     document.title = 'Ventures | LFG';
     const head = h('div', 'vd-pagehead',
@@ -240,7 +260,7 @@
     const table = h('div', 'vd-list',
       h('div', 'vd-row vd-row-head', ...['Venture', 'Status', 'Spent', 'Progress', 'Revenue', 'Updated'].map((t, i) => el('span', t, `vd-cell${i === 5 ? ' vd-cell-end' : ''}`))),
       ...shown.map(row));
-    root.replaceChildren(head, stats(), chips, table);
+    root.replaceChildren(head, scope === 'mine' ? pickUp() : '', stats(), chips, table);
   }
 
   // ---- detail: shared bits ------------------------------------------------
@@ -594,6 +614,9 @@
       };
       return h('li', '', h('label', '', box, h('div', '', el('strong', t.action), el('span', [t.dueWeek !== null ? `Week ${t.dueWeek}` : null, t.successSignal].filter(Boolean).join(' · '), 'vd-sub'))));
     })));
+    if (data.isOwner && !data.conversation.archivedAt) section.append(h('div', 'vd-todos-foot',
+      el('span', 'Tick each one as you finish it. The analyst sees your progress and helps with the next one.', 'vd-sub'),
+      link('Continue with the analyst', `/venture/chat?c=${encodeURIComponent(data.conversation.id)}`, 'vd-btn primary')));
     return section;
   }
 
@@ -635,35 +658,56 @@
     return form;
   }
 
-  // Reviewers: what's going on in this conversation and how LFG can move it
-  // forward, then a message to the founder from the LFG team.
-  function helpFounder(data, reload) {
+  // Reviewers: chat with an agent that has read this founder's whole business
+  // conversation, then send the founder a message from the LFG team.
+  const SUGGESTIONS = ['How can I help this founder move forward?', 'What is this business, in plain words?', 'What’s missing before LFG could fund it?', 'Draft a message to the founder'];
+  function helpFounder(data, sources) {
     const card = el('section', '', 'vd-card vd-help');
-    const question = el('input'); question.type = 'text'; question.maxLength = 2000;
-    question.placeholder = 'Optional: ask something specific about this venture';
-    question.setAttribute('aria-label', 'Question about this venture');
-    const result = el('div', '', 'vd-help-result');
-    const message = el('textarea'); message.rows = 6; message.maxLength = 4000; message.placeholder = 'Write to the founder as the LFG team…';
+    const turns = [];
+    const log = el('div', '', 'vd-chat-log'); log.setAttribute('role', 'log'); log.setAttribute('aria-live', 'polite');
+    const input = el('textarea'); input.rows = 2; input.maxLength = 4000; input.placeholder = 'Ask anything about this founder’s business…';
+    input.setAttribute('aria-label', 'Ask the venture agent');
+    const askBtn = el('button', 'Ask', 'vd-btn primary'); askBtn.type = 'button';
+    const chips = h('div', 'vd-chat-chips', ...SUGGESTIONS.map(q => btn(q, () => ask(q), 'vd-chip')));
+    const message = el('textarea'); message.rows = 6; message.maxLength = 4000; message.placeholder = 'Write to the founder as the LFG team, or use one of the agent’s drafts…';
     message.setAttribute('aria-label', 'Message to the founder');
     const email = el('input'); email.type = 'checkbox'; email.checked = true;
     const sent = el('p', '', 'vd-sub'); sent.setAttribute('role', 'status');
     const send = el('button', 'Send to founder', 'vd-btn primary'); send.type = 'button';
-    const ask = el('button', 'How can I help?', 'vd-btn primary'); ask.type = 'button';
-    ask.onclick = async () => {
-      ask.disabled = true; ask.textContent = 'Reading the conversation…'; result.replaceChildren(el('p', 'This takes about 20 seconds.', 'vd-sub'));
-      try {
-        const { advice: a } = await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/advice`, { method: 'POST', body: JSON.stringify(question.value.trim() ? { question: question.value.trim() } : {}) });
-        const part = (label, text) => text ? h('div', 'vd-help-part', el('span', label, 'vd-stat-label'), el('p', text)) : null;
-        result.replaceChildren(
-          el('p', a.stage, 'vd-lead'),
-          part('Your question', a.answer), part('The founder', a.founderState), part('Stuck on', a.stuckOn),
-          h('div', 'vd-help-part', el('span', 'How you can help', 'vd-stat-label'), h('ol', 'vd-steps', ...a.howToHelp.map(x => el('li', x)))),
-          part('Steer the analyst', a.analystSteer));
-        if (!message.value.trim() || message.dataset.suggested === 'yes') { message.value = a.founderMessage; message.dataset.suggested = 'yes'; }
-      } catch (error) { result.replaceChildren(el('p', errorText(error), 'vd-error')); }
-      finally { ask.disabled = false; ask.textContent = 'Ask again'; }
+    let busy = false;
+    const bubble = (role, text) => {
+      const b = el('div', '', `vd-chat-msg ${role}`);
+      if (role === 'user') b.textContent = text; else if (text) window.ventureMarkdown ? window.ventureMarkdown.into(b, text, sources) : (b.textContent = text);
+      log.append(b); log.scrollTop = log.scrollHeight; return b;
     };
-    message.oninput = () => { message.dataset.suggested = 'no'; };
+    async function ask(text) {
+      text = (text ?? input.value).trim();
+      if (!text || busy) return;
+      busy = true; askBtn.disabled = true; chips.hidden = true; input.value = '';
+      turns.push({ role: 'user', content: text }); bubble('user', text);
+      const reply = bubble('agent', ''); reply.append(el('span', 'Reading the conversation…', 'vd-sub'));
+      let answer = '';
+      try {
+        const response = await fetch(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/chat`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: turns }) });
+        if (!response.ok || !response.body) { const e = await response.json().catch(() => ({})); throw Object.assign(new Error(e.error || 'The agent could not answer. Retry in a moment.'), { requestId: e.requestId }); }
+        const reader = response.body.getReader(), decoder = new TextDecoder();
+        let shown = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          answer += decoder.decode(value, { stream: true });
+          if (answer.length - shown > 40) { shown = answer.length; window.ventureMarkdown ? window.ventureMarkdown.into(reply, answer, sources) : (reply.textContent = answer); log.scrollTop = log.scrollHeight; }
+        }
+        if (!answer.trim()) throw new Error('The agent returned no answer. Retry in a moment.');
+        window.ventureMarkdown ? window.ventureMarkdown.into(reply, answer, sources) : (reply.textContent = answer);
+        turns.push({ role: 'assistant', content: answer });
+        reply.append(h('div', 'vd-chat-actions', btn('Use as message to founder', () => { message.value = answer.trim(); message.focus(); message.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 'vd-link-btn')));
+      } catch (error) {
+        turns.pop(); reply.replaceChildren(el('p', errorText(error), 'vd-error'));
+      } finally { busy = false; askBtn.disabled = false; log.scrollTop = log.scrollHeight; input.focus(); }
+    }
+    askBtn.onclick = () => ask();
+    input.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(); } };
     send.onclick = () => {
       const text = message.value.trim();
       if (!text) { sent.textContent = 'Write a message first.'; message.focus(); return; }
@@ -671,16 +715,17 @@
         send.disabled = true; sent.textContent = 'Sending…';
         try {
           const r = await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/team-message`, { method: 'POST', body: JSON.stringify({ message: text, email: email.checked }) });
-          message.value = ''; message.dataset.suggested = 'no';
+          message.value = '';
           sent.textContent = r.emailed ? 'Sent, and emailed to the founder.' : 'Sent to the founder’s chat.';
         } catch (error) { sent.textContent = errorText(error); }
         finally { send.disabled = false; }
       } });
     };
-    card.append(el('h2', 'Help this founder'),
-      el('p', [founderLine(data.engagement), data.engagement ? `${data.engagement.founderMessages} message${data.engagement.founderMessages === 1 ? '' : 's'} from them` : null].filter(Boolean).join(' · '), 'vd-sub'),
-      question, ask, result,
-      h('div', 'vd-help-send', el('span', 'Message from the LFG team', 'vd-stat-label'), message,
+    card.append(
+      h('div', 'vd-help-head', el('h2', 'Ask about this venture'), el('span', 'Only LFG reviewers see this', 'vd-sub')),
+      el('p', ['The agent has read the whole conversation with this founder.', founderLine(data.engagement) ? `${founderLine(data.engagement)}.` : null].filter(Boolean).join(' '), 'vd-sub'),
+      log, chips, h('div', 'vd-chat-input', input, askBtn),
+      h('div', 'vd-help-send', el('span', 'Message to the founder, from the LFG team', 'vd-stat-label'), message,
         h('label', 'vd-check', email, el('span', data.owner?.email ? `Also email ${data.owner.email}` : 'Also email the founder')),
         h('div', 'vd-help-actions', send), sent));
     return card;
@@ -725,7 +770,7 @@
         r ? dot(VERDICT[r.verdict]) : null, r ? el('span', `Analyst${r.tier ? ` · ${TIER[r.tier]}` : ''}`, 'vd-sub') : null,
         data.owner?.name ? el('span', data.owner.name, 'vd-sub') : null,
         data.owner?.email ? link(data.owner.email, `mailto:${data.owner.email}`, 'vd-email-link') : null,
-        data.engagement ? dot(ENGAGEMENT[data.engagement.engagement]) : null,
+        data.engagement ? engagementDot(data.engagement) : null,
         data.assessment ? el('span', `Assessment v${data.assessment.version}, ${date(data.assessment.createdAt)}`, 'vd-sub') : null);
       const archived = Boolean(data.conversation.archivedAt), canManage = data.isOwner || isAdmin, title = data.conversation.title;
       const archive = async to => {
@@ -744,6 +789,11 @@
           data.isOwner && !archived ? link('Open chat', `/venture/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null));
 
       const main = h('div', 'vd-main'), side = h('aside', 'vd-side');
+      // Reviewers work from the chat first: it sits at the top of the main column.
+      if (isAdmin) main.append(helpFounder(data, sources));
+      // A founder's open to-dos come first, so they can pick up where they left off.
+      const todosFirst = data.isOwner && data.tasks.length > 0;
+      if (todosFirst) main.append(todos(data));
       main.append(...[building(data, r, reload), (data.progress.total || data.metrics.length) ? results(data, reload) : null, timeline(data)].filter(Boolean));
       if (a) {
         main.append(h('div', 'vd-divider', el('span', 'Assessment'), el('span', `by the analyst · v${data.assessment.version}`, 'vd-sub')));
@@ -754,9 +804,8 @@
         }
         main.append(market(a, sources), founderFit(a, sources), gtm(a, sources), card('Risks and uncertainties', claims(a.uncertainties, sources)));
       }
-      if (isAdmin) side.append(helpFounder(data, reload));
       if (isAdmin && (scope === 'all' || !data.isOwner)) side.append(decisionForm(data, r, reload));
-      if (r) side.append(todos(data), card('Next steps', h('ol', 'vd-steps', ...r.nextSteps.map(s => el('li', s)))));
+      if (r) side.append(todosFirst ? '' : todos(data), card('Next steps', h('ol', 'vd-steps', ...r.nextSteps.map(s => el('li', s)))));
       if (a?.missingInputs.length) side.append(card('Missing inputs', h('ul', 'vd-plain', ...a.missingInputs.map(m => el('li', m)))));
       if (isAdmin) side.append(transcript(data, sources));
 
