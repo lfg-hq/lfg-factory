@@ -175,7 +175,7 @@ const menuItem = ([href, icon, label, sub]: NavItem) => html`
     </span>
   </a>`;
 
-export const SiteNav = ({ active = "none", venture = false }: { active?: SitePage; venture?: boolean }) => {
+export const SiteNav = ({ active = "none", venture = false, signedIn = false }: { active?: SitePage; venture?: boolean; signedIn?: boolean }) => {
   const cls = (on: boolean) => on ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600";
   const isProduct = active === "how-it-works" || active === "agent" || active === "self-host";
   const isSolutions = active === "software-services" || active === "startups" || active === "services";
@@ -186,12 +186,23 @@ export const SiteNav = ({ active = "none", venture = false }: { active?: SitePag
       <span class="font-display font-bold text-xl tracking-tight text-slate-900">LFG</span>
     </a>`;
 
-  // LFG Ventures stands on its own: just the logo and a way to the software factory.
+  // LFG Ventures stands on its own: its brand, the thesis, a way to the
+  // software factory, and the founder's way back into their dashboard.
   if (venture) return html`
 <nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 bg-transparent py-4">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center gap-4">
-    ${logo}
-    <a href="/" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Check out our software factory</a>
+    <div class="flex items-center gap-3 min-w-0">
+      ${logo}
+      <span class="hidden sm:inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-700 bg-brand-50 border border-brand-100 rounded-full px-2.5 py-1">Ventures</span>
+    </div>
+    <div class="flex items-center gap-1 sm:gap-2">
+      <a href="/venture/thesis" class="hidden md:inline-flex items-center px-3 py-2 rounded-full text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors">Our thesis</a>
+      <a href="/" class="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors">Software factory <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i></a>
+      <span class="hidden md:block w-px h-5 bg-slate-200 mx-1.5" aria-hidden="true"></span>
+      ${signedIn
+        ? html`<a href="/venture/dashboard" class="inline-flex items-center gap-2 bg-slate-900 hover:bg-brand-700 text-white pl-4 pr-3.5 py-2 rounded-full text-sm font-semibold shadow-sm transition-colors whitespace-nowrap"><i data-lucide="layout-dashboard" class="w-4 h-4"></i>Your dashboard</a>`
+        : html`<a href="/venture/dashboard" class="inline-flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 hover:border-slate-300 pl-3.5 pr-4 py-2 rounded-full text-sm font-semibold shadow-sm transition-colors whitespace-nowrap"><i data-lucide="log-in" class="w-4 h-4 text-brand-600"></i>Sign in</a>`}
+    </div>
   </div>
 </nav>
 <script>

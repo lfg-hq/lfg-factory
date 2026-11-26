@@ -5,11 +5,17 @@ import { VentureChatPage } from "../templates/chat.tsx";
 import { VentureThesisPage } from "../templates/thesis.tsx";
 import { VentureTermsPage } from "../templates/terms.tsx";
 import { loggedRequest } from "../request-log.ts";
+import { auth } from "../../auth/index.ts";
 
 // Public shells only; every venture's data loads through /api/venture with
 // its own sign-in and ownership checks.
 const venturePages = new Hono();
-venturePages.get("/venture", c => loggedRequest(c.req.raw, "venture.landing", async () => c.html(VentureAnalystPage())));
+// The landing only asks whether someone is signed in, to offer "Your dashboard"
+// instead of "Sign in"; the dashboard itself does the real access checks.
+venturePages.get("/venture", c => loggedRequest(c.req.raw, "venture.landing", async () => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers }).catch(() => null);
+  return c.html(VentureAnalystPage({ signedIn: Boolean(session) }));
+}));
 venturePages.get("/venture/terms", c => loggedRequest(c.req.raw, "venture.terms", async () => c.html(VentureTermsPage())));
 venturePages.get("/venture/thesis", c => loggedRequest(c.req.raw, "venture.thesis", async () => c.html(VentureThesisPage())));
 venturePages.get("/venture/chat", c => loggedRequest(c.req.raw, "venture.chat", async () => c.html(VentureChatPage())));
