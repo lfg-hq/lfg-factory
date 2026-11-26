@@ -290,3 +290,24 @@ test("a build's walkthrough becomes the ticket's recorded feature test", async (
   const other = await handleWalkthroughUpload(new Request("http://x/", { method: "POST", body: form }), job.id, { id: "someone-else", name: "X" });
   expect(other.status).toBe(404);
 });
+
+test("a result sent after the server gave the build up still lands, with its checks", async () => {
+  const mac = fakeConn("late-mac", "alice", "Alice's Mac");
+  await hub.runnerOpened(mac);
+  await say(mac, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  await say(mac, { type: "job.accepted", jobId: job.id });
+  await db.update(runnerJobs).set({ status: "failed", error: "Lost contact with Alice's Mac." }).where(eq(runnerJobs.id, job.id));
+  // It finished while asleep; on waking it lists the job as running, then reports it.
+  const again = fakeConn("late-mac", "alice", "Alice's Mac");
+  await hub.runnerOpened(again);
+  await say(again, { type: "hello", activeJobIds: [job.id] });
+  await say(again, { type: "job.finished", jobId: job.id, ok: true, branch: "lfg/x", commitSha: "abc1234",
+    checks: [{ name: "Tests", status: "passed", detail: "12 of 12" }] });
+  expect((await jobRow(job.id)).status).toBe("succeeded");
+  expect((await ticketRow(ticketId)).status).toBe("review");
+  const logs = (await db.select().from(ticketLogs).where(eq(ticketLogs.ticketId, ticketId))).map(l => l.command);
+  expect(logs).toContain("[Validation] Validation check: ✓ Tests: passed — 12 of 12");
+  expect(logs.some(l => l.startsWith("[Validation] ✅ Validation passed on Alice's Mac"))).toBe(true);
+});

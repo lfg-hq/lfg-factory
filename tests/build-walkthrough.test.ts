@@ -99,3 +99,19 @@ test("a step that can't use its element says what the locator matched", async ()
     expect(await text(browser.call({ action: "fill", locator: { label: "From" }, value: "09:00" }))).toContain("fill done.");
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
+
+test("a build's checks report is read from what it said, and shows as the Validation step", async () => {
+  const { parseBuildReport } = await import("../desktop/src/runner.ts");
+  const { checksMessages } = await import("../src/services/runner/hub.ts");
+  const r = parseBuildReport(["Working.", 'Done.\n```json\n{"checks": [{"name": "Tests", "command": "npm test", "status": "preexisting", "detail": "143 of 148"}, {"name": "Typecheck", "status": "passed"}], "howToRun": "nvm use 22 && npm test"}\n```', "Notice handled."]);
+  expect(r).toEqual({ checks: [
+    { name: "Tests", status: "preexisting", command: "npm test", detail: "143 of 148" },
+    { name: "Typecheck", status: "passed" },
+  ], howToRun: "nvm use 22 && npm test" });
+  const rows = checksMessages(r!.checks, "Mac");
+  expect(rows[0]).toStartWith("[Validation] Validation check: ⚠ Tests (`npm test`): fails the same way without this ticket — 143 of 148");
+  expect(rows.at(-1)).toBe("[Validation] ✅ Validation passed on Mac: 1 of 2 checks passed; Tests already failed before this ticket.");
+  expect(checksMessages([{ name: "Build", status: "failed" }], "Mac").at(-1)).toBe("[Validation] ❌ Checks failed on Mac: Build.");
+  // A walkthrough's block is not a build report.
+  expect(parseBuildReport(['```json\n{"applicable": true, "checks": []}\n```'])).toBeNull();
+});

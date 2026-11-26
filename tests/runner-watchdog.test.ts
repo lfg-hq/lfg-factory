@@ -68,3 +68,22 @@ test("the computer is kept awake while an agent works, and let go when it's done
   runner.stop();
   expect(busy).toEqual([true, false]);
 });
+
+test("a job's outcome reached while offline is sent on reconnect, with the job listed as still running", async () => {
+  const { made, create } = fakeSockets();
+  const runner = new Runner({ serverUrl: "http://lfg.test", token: "t", workRoot: "/tmp/lfg-wd", createSocket: create,
+    approve: async () => ({ approved: false }), agentBins: none });
+  runner.start();
+  const first = made[0]!;
+  first.readyState = 3; // the Mac slept: the socket is gone
+  (runner as any).send({ type: "job.finished", jobId: "j9", ok: true, branch: "b", commitSha: "abc" });
+  runner.reconnectNow("woke");
+  const second = made.at(-1)!;
+  const sent: any[] = [];
+  second.send = (d: string) => { sent.push(JSON.parse(d)); };
+  await second.onopen!({});
+  runner.stop();
+  expect(sent[0].type).toBe("hello");
+  expect(sent[0].activeJobIds).toContain("j9");
+  expect(sent[1]).toMatchObject({ type: "job.finished", jobId: "j9", ok: true });
+});

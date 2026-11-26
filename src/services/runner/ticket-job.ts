@@ -46,7 +46,11 @@ export function buildRunnerPrompt(ticket: {
     "- Edit files with your edit tools rather than writing scripts that rewrite them.",
     "- Other tickets may be building on this computer at the same time, each in its own folder. Don't rely on fixed ports or shared database names: give anything you start or create for tests a name or port of its own.",
     "- Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
-    "- End with a short summary of what you changed and anything left undone.",
+    "- End with a short summary of what you changed and anything left undone, then one JSON block reporting the checks you ran at the end (LFG shows them on the ticket), and nothing after it:",
+    "```json",
+    '{"checks": [{"name": "Tests", "command": "<what you ran>", "status": "passed" | "failed" | "preexisting", "detail": "<e.g. 143 of 148 passed>"}], "howToRun": "<the exact commands that ran the checks on this computer, with any PATH, env or database setup they needed>"}',
+    "```",
+    "  Use \"preexisting\" only for a check that fails the same way without your change (you checked). List tests, typecheck, lint and build, whichever the project has.",
   ].join("\n");
 }
 

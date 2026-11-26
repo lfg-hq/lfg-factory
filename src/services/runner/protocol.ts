@@ -22,6 +22,9 @@ export const isAgentKind = (v: unknown): v is AgentKind => typeof v === "string"
  * What any agent CLI did, in one shape (each CLI's own output format is translated on the
  * computer, see desktop/src/agents.ts).
  */
+/** One check a build ran (tests, typecheck, lint, build) and how it went. "preexisting": it fails the same way without this ticket. */
+export interface BuildCheck { name: string; command?: string; status: "passed" | "failed" | "preexisting"; detail?: string }
+
 export type AgentEvent =
   | { type: "session"; id: string }
   | { type: "text"; text: string }
@@ -194,5 +197,5 @@ export type RunnerToServer =
   | { type: "job.event"; jobId: string; event: AgentEvent }
   /** A preview's progress, log lines and local address (protocol 3). */
   | { type: "job.preview"; jobId: string; update: PreviewUpdate }
-  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }
+  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string; checks?: BuildCheck[] }
   | { type: "pong" };

@@ -20,7 +20,7 @@ import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { emit } from "../../events/bus.ts";
 import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
-import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type PreviewPayload, type PreviewDataPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
+import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type BuildCheck, type ChatTurnPayload, type ClaudeTaskPayload, type PreviewPayload, type PreviewDataPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
   deviceId: string;
@@ -380,7 +380,7 @@ export async function resumeLostJobs(conn: Pick<RunnerConn, "deviceId" | "device
 }
 
 async function finishJob(jobId: string, deviceId: string,
-  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string }): Promise<void> {
+  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string; mergeSha?: string; mergeError?: string; checks?: BuildCheck[] }): Promise<void> {
   clearTimeout(lostTimers.get(jobId)); lostTimers.delete(jobId);
   const updated = await db.update(runnerJobs).set({
     status: result.ok ? "succeeded" : "failed",
@@ -398,6 +398,7 @@ async function finishJob(jobId: string, deviceId: string,
   notify(jobId, { type: "finished", ok: result.ok, summary: result.summary, error: result.error, sessionId: result.sessionId ?? job.agentSession ?? undefined });
   if (job.type === "preview") { await (await previews()).previewJobChanged(job, { type: "finished", ok: result.ok, error: result.error }); return; }
   if (job.type === "preview_data") return; // its caller is watching; no ticket to update
+  if (result.checks?.length) await recordChecks(job, result.checks, conns.get(deviceId)?.deviceName ?? "your computer");
 
   if (!result.ok) {
     await ticketUpdate(job, { status: "failed", queueStatus: "none" }, `Build on your computer failed: ${result.error ?? "unknown error"}`, "cli_error");
@@ -421,6 +422,26 @@ async function finishJob(jobId: string, deviceId: string,
         : `${agentLabel(job)} finished without changing any files.`);
   await recordMerge(job, result);
   buildFinished(job, pushed || alreadyBuilt ? "complete" : "failed");
+}
+
+/**
+ * The checks the build ran on the computer (tests, typecheck, lint, build), as the ticket's
+ * Validation step: one row each, then the outcome. A check that fails the same way without
+ * the ticket is shown as already failing, not as this ticket's failure.
+ */
+export function checksMessages(checks: BuildCheck[], deviceName: string): string[] {
+  const icon = { passed: "✓", failed: "✕", preexisting: "⚠" } as const;
+  const rows = checks.map(c => `[Validation] Validation check: ${icon[c.status]} ${c.name}${c.command ? ` (\`${c.command.slice(0, 120)}\`)` : ""}: ${c.status === "preexisting" ? "fails the same way without this ticket" : c.status}${c.detail ? ` — ${c.detail}` : ""}`);
+  const failed = checks.filter(c => c.status === "failed");
+  const already = checks.filter(c => c.status === "preexisting");
+  rows.push(failed.length
+    ? `[Validation] ❌ Checks failed on ${deviceName}: ${failed.map(c => c.name).join(", ")}.`
+    : `[Validation] ✅ Validation passed on ${deviceName}: ${checks.length - already.length} of ${checks.length} checks passed${already.length ? `; ${already.map(c => c.name).join(", ")} already failed before this ticket` : ""}.`);
+  return rows;
+}
+
+async function recordChecks(job: typeof runnerJobs.$inferSelect, checks: BuildCheck[], deviceName: string) {
+  for (const text of checksMessages(checks, deviceName)) await logToTicket(job, text, text.includes("❌") ? "cli_error" : "agent_progress");
 }
 
 /** The computer merged (or couldn't merge) the ticket branch into its epic branch. */

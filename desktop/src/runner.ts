@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, renameSync, readdirSync, 
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import os from "node:os";
-import type { AgentEvent, AgentKind, ClaudeTaskPayload, PreviewUrl, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import type { AgentEvent, AgentKind, BuildCheck, ClaudeTaskPayload, PreviewUrl, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
 import { RUNNER_PROTOCOL_VERSION, isAgentEffort, isAgentModel } from "./protocol.ts";
 import { LocalPreview, PreviewStopped, dependencyFingerprint, previewCommands, previewFolderName, validatePreviewPayload } from "./preview.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
@@ -186,8 +186,11 @@ export class Runner {
 
   private log(line: string) { this.opts.log?.(`[runner] ${line}`); }
 
+  /** A job's outcome reached while offline (the computer slept or lost its network): sent on reconnect. */
+  private outbox: RunnerToServer[] = [];
   private send(message: RunnerToServer) {
     if (this.socket?.readyState === 1) this.socket.send(JSON.stringify(message));
+    else if (message.type === "job.finished" || message.type === "job.rejected") this.outbox.push(message);
   }
 
   private connect() {
@@ -201,7 +204,10 @@ export class Runner {
     socket.onopen = async () => {
       this.agents ??= await detectAgents(this.opts.env ?? process.env, this.bins());
       const claude = this.agents.find(a => a.kind === "claude");
-      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()], protocol: RUNNER_PROTOCOL_VERSION });
+      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys(), ...this.outbox.flatMap(m => "jobId" in m ? [m.jobId] : [])], protocol: RUNNER_PROTOCOL_VERSION });
+      // Outcomes from while it was away: listed as still running above, so the server takes
+      // the jobs back instead of giving up on them, then hears how they ended.
+      for (const m of this.outbox.splice(0)) this.send(m);
     };
     socket.onmessage = (ev) => { this.lastHeard = Date.now(); void this.handle(String(ev.data)); };
     socket.onerror = () => { /* onclose follows */ };
@@ -572,7 +578,7 @@ const FINISH_PROMPT = [
   "You reached the step limit for this run. Finish the ticket now in as few steps as possible:",
   "- complete any change that is still half done;",
   "- rerun only the tests that failed or that cover what you just changed, not the full suite again;",
-  "- then stop and end with a short summary of what you changed and anything left undone.",
+  "- then stop and end with a short summary of what you changed and anything left undone, followed by the JSON checks block the ticket asked for.",
   "Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
 ].join("\n");
 
@@ -618,6 +624,28 @@ export const WALKTHROUGH_PROMPT = [
   "```",
   'If this ticket has nothing a person could see or do in a browser (a pure backend, data or tooling change), don\'t start anything: reply with {"applicable": false, "reason": "<one sentence>", "checks": []}.',
 ].join("\n");
+
+/** The checks a build reports at the end (tests, typecheck, lint, build), and how it ran them here. */
+export function parseBuildReport(texts: string[]): { checks: BuildCheck[]; howToRun?: string } | null {
+  for (const text of [...texts].reverse()) {
+    if (!text.includes('"checks"')) continue;
+    const blocks = [...text.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)].map(m => m[1]!);
+    for (const raw of blocks.reverse()) {
+      try {
+        const j = JSON.parse(raw) as { checks?: unknown; howToRun?: unknown; applicable?: unknown };
+        if (!Array.isArray(j.checks) || "applicable" in j) continue;
+        const checks = j.checks.slice(0, 12).flatMap((c: any) => c && typeof c.name === "string" ? [{
+          name: c.name.slice(0, 80),
+          status: c.status === "passed" ? "passed" as const : c.status === "preexisting" ? "preexisting" as const : "failed" as const,
+          ...(typeof c.command === "string" ? { command: c.command.slice(0, 300) } : {}),
+          ...(typeof c.detail === "string" ? { detail: c.detail.slice(0, 400) } : {}),
+        }] : []);
+        return { checks, ...(typeof j.howToRun === "string" && j.howToRun.trim() ? { howToRun: j.howToRun.slice(0, 2000) } : {}) };
+      } catch { /* not this block */ }
+    }
+  }
+  return null;
+}
 
 /** The JSON block at the end of the walkthrough reply. */
 export function parseWalkthrough(text: string | string[] | undefined): WalkthroughReport | null {
@@ -697,7 +725,7 @@ async function recordWalkthrough(job: BuildJobOffer, active: ActiveJob, ctx: Tas
 }
 
 export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
-  : Promise<{ branch: string; commitSha: string | null; summary?: string; mergeSha?: string; mergeError?: string }> {
+  : Promise<{ branch: string; commitSha: string | null; summary?: string; mergeSha?: string; mergeError?: string; checks?: BuildCheck[] }> {
   const p = job.payload;
   const repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));
   const worktree = join(ctx.workRoot, "worktrees", p.branch.replace(/[^A-Za-z0-9._-]+/g, "-"));
@@ -743,10 +771,17 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
 
   const tools = (p.allowedTools?.length ? p.allowedTools.filter(t => ctx.allowedTools.includes(t)) : ctx.allowedTools);
   ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
+  // How the checks ran on this computer last time, for this repository: saves each build
+  // rediscovering the Node version, database and env the project's tests need.
+  const recipeFile = join(ctx.workRoot, "checks", `${createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12)}.txt`);
+  const recipe = existsSync(recipeFile) ? readFileSync(recipeFile, "utf8").trim() : "";
+  const prompt = recipe ? `${p.prompt}\n\n## Running the checks on this computer\nAn earlier build ran this project's checks here like this (adapt it if the project changed):\n\n${recipe}` : p.prompt;
+  const said: string[] = [];
+  const agentEvent = (event: AgentEvent) => { if (event.type === "text" || (event.type === "result" && event.text)) said.push(event.type === "text" ? event.text : event.text!); ctx.agentEvent(event); };
   const attempt = (sessionId?: string) => runAgent(ctx.agent, {
-    prompt: p.prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
+    prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
     model: isAgentModel(p.model) ? p.model : undefined, effort: isAgentEffort(p.effort) ? p.effort : undefined,
-    onEvent: ctx.agentEvent,
+    onEvent: agentEvent,
     onSpawn: child => { active.child = child; },
   }).finally(() => { active.child = undefined; });
   const first = attempt(p.sessionId).catch(async (error: Error) => {
@@ -765,12 +800,15 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
     return runAgent(ctx.agent, {
       prompt: FINISH_PROMPT, cwd: worktree, sessionId: error.sessionId, allowedTools: tools, maxTurns: 40, env: ctx.env, bin: ctx.bin,
       model: isAgentModel(p.model) ? p.model : undefined, effort: isAgentEffort(p.effort) ? p.effort : undefined,
-      onEvent: ctx.agentEvent,
+      onEvent: agentEvent,
       onSpawn: child => { active.child = child; },
     }).finally(() => { active.child = undefined; }).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
   });
   // Keep what the agent installed for the next ticket, whether or not this one finished.
-  const { summary, sessionId: buildSession } = await finished.finally(() => depsKey ? savePackages(worktree, join(depsDir, depsKey), depsKey, ctx.env).catch(() => {}) : undefined);
+  const built = await finished.finally(() => depsKey ? savePackages(worktree, join(depsDir, depsKey), depsKey, ctx.env).catch(() => {}) : undefined);
+  const { summary, sessionId: buildSession } = built;
+  const report = parseBuildReport([...said, summary ?? ""]);
+  if (report?.howToRun) { try { mkdirSync(join(ctx.workRoot, "checks"), { recursive: true }); writeFileSync(recipeFile, report.howToRun); } catch { /* best effort */ } }
   check();
 
   const identity = (await run("git", ["config", "user.email"], { cwd: worktree, env: ctx.env })).stdout.trim()
@@ -798,7 +836,7 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
     await recordWalkthrough(job, active, ctx, worktree, buildSession, tools).catch(() => {});
     check();
   }
-  return { branch: p.branch, commitSha: saved.commitSha, summary, ...saved.merge };
+  return { branch: p.branch, commitSha: saved.commitSha, summary, ...saved.merge, ...(report?.checks.length ? { checks: report.checks } : {}) };
 }
 
 /** Merge the pushed ticket branch into `p.mergeInto` and push it. Conflicts go to the agent once. */
@@ -837,10 +875,13 @@ export async function mergeIntoTarget(p: ClaudeTaskPayload, ctx: TaskContext & {
           const conflicts = (await tryGit(["diff", "--name-only", "--diff-filter=U"], wt)).stdout.trim();
           if (!conflicts) throw new Error(`git merge failed: ${(merged.stderr || merged.stdout).trim().slice(0, 300)}`);
           ctx.progress(`Merge conflicts in ${conflicts.split("\n").join(", ")}. Asking ${AGENTS[ctx.agent].label} to resolve them…`);
+          const mergeDeps = await dependencyFingerprint(wt, "ticket-build", null, ctx.env).catch(() => null);
+          if (mergeDeps) await restorePackages(join(ctx.workRoot, "deps", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12), mergeDeps), wt, ctx.env).catch(() => false);
           await runAgent(ctx.agent, {
             prompt: [
               `Merging ticket branch ${p.branch} into ${target} hit conflicts in:`, conflicts, "",
-              "Resolve every conflict so both sides' intent is kept, remove all conflict markers, and make sure the code still builds.",
+              "Resolve every conflict so both sides' intent is kept, remove all conflict markers, and make sure the code still builds: run the typecheck (and the build, if it's quick) before you finish.",
+              "Run commands in the foreground and wait for them, not as background tasks: you're done when the typecheck has passed, not when it has started. If node_modules is missing, install once.",
               "Do not commit, push, abort the merge or switch branches. LFG Desktop finishes the merge.",
             ].join("\n"),
             cwd: wt, allowedTools: ctx.tools, maxTurns: 40, env: ctx.env, bin: ctx.bin,
