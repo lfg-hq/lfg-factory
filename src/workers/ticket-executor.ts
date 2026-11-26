@@ -195,7 +195,7 @@ import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
-import { eq, and, asc, desc, inArray, ne } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, ne, notInArray } from "drizzle-orm";
 
 /** Find a stage by name for a project and move the ticket to it. */
 async function moveTicketToStage(ticketId: string, projectId: string, stageName: string): Promise<string | null> {
@@ -1111,12 +1111,25 @@ async function runnerJobOutcome(jobId: string, timeoutMs = 3 * 60 * 60_000): Pro
   });
 }
 
-export async function startTicketWorker() {
-  // Reset any tickets stuck in executing state from a previous crash
+/**
+ * Reset tickets stuck in executing state from a previous crash. A ticket building on
+ * someone's computer is not stuck: that build carries on through a restart of this server
+ * and reports back when it reconnects. Resetting it let the build run send the same ticket
+ * out a second time while the first build was still working in the same folder.
+ */
+export async function resetStuckTickets(): Promise<void> {
+  const { runnerJobs } = await import("../db/schema/runners.ts");
+  const onComputers = await db.selectDistinct({ ticketId: runnerJobs.ticketId }).from(runnerJobs)
+    .where(inArray(runnerJobs.status, ["queued", "offered", "running"]));
+  const keep = onComputers.map(j => j.ticketId).filter((id): id is string => !!id);
   await db
     .update(projectTickets)
     .set({ queueStatus: "none", updatedAt: new Date() })
-    .where(eq(projectTickets.queueStatus, "executing"));
+    .where(keep.length ? and(eq(projectTickets.queueStatus, "executing"), notInArray(projectTickets.id, keep)) : eq(projectTickets.queueStatus, "executing"));
+}
+
+export async function startTicketWorker() {
+  await resetStuckTickets();
 
   // Re-queue tickets that were queued before the crash/restart
   const pendingQueued = await db

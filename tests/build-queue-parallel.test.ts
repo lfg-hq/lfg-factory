@@ -83,3 +83,15 @@ test("when no ticket names a prerequisite, the run keeps its saved order", async
   await finish("A");
   expect(await status(run)).toEqual({ A: "done", B: "queued", C: "pending" });
 });
+
+test("a server restart leaves tickets building on a computer alone, so the run doesn't send them out twice", async () => {
+  const runId = await project("restart", "computer", { R1: [], R2: [] });
+  await db.update(projectTickets).set({ status: "in_progress", queueStatus: "executing" }).where(eq(projectTickets.projectId, "restart"));
+  const { runnerJobs } = await import("../src/db/schema/runners.ts");
+  await db.insert(runnerJobs).values({ id: "job-r1", userId: "alice", projectId: "restart", ticketId: "restart-R1", type: "claude_task", payload: "{}", status: "running" });
+  const { resetStuckTickets } = await import("../src/workers/ticket-executor.ts");
+  await resetStuckTickets();
+  const q = Object.fromEntries((await db.select().from(projectTickets).where(eq(projectTickets.projectId, "restart"))).map(t => [t.ticketKey, t.queueStatus]));
+  expect(q).toEqual({ R1: "executing", R2: "none" });
+  expect(runId).toBeTruthy();
+});
