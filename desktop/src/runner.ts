@@ -598,7 +598,7 @@ interface TaskContext {
 export interface WalkthroughReport {
   applicable: boolean;
   reason?: string;
-  checks: Array<{ label: string; status: "passed" | "failed"; expected?: string; actual?: string }>;
+  checks: Array<{ label: string; status: "passed" | "failed" | "blocked"; expected?: string; actual?: string }>;
 }
 
 // Builds of the same repository share its clone: one git step at a time there, while
@@ -616,11 +616,11 @@ export const WALKTHROUGH_PROMPT = [
   "The build is saved. Now show that the ticket works, the way a person would check it: in the browser.",
   "1. Start the app from this folder on a free port of its own (other tickets may be running apps on this computer; don't use the default port if it's taken). Use the project's own dev or start command and any local database or seed it needs for testing. Start it from a normal shell command with `nohup … > app.log 2>&1 &` and note its PID, not as a background task of yours: a background task that ends later would wake you after you've reported. Wait until it answers.",
   "2. Use the browser tool to open the app at its full http://localhost:<port> address. The browser is being recorded for the ticket's reviewers, so move at a person's pace: sign in if needed, then go through each acceptance criterion, doing what a user would do and checking what appears.",
-  "3. Don't change the code now. If something doesn't work, record it as failed with what you saw.",
+  "3. Don't change the code now. If something doesn't work, record it as failed with what you saw. If you can't try a criterion here at all (a missing API key, outside service or account this computer doesn't have), record it as blocked and say what was missing: that is not a failure of the feature.",
   "4. Stop the app you started.",
   "End your reply with one JSON block, and nothing after it:",
   "```json",
-  '{"applicable": true, "checks": [{"label": "<the acceptance criterion, short>", "status": "passed" | "failed", "expected": "<what should happen>", "actual": "<what you saw>"}]}',
+  '{"applicable": true, "checks": [{"label": "<the acceptance criterion, short>", "status": "passed" | "failed" | "blocked", "expected": "<what should happen>", "actual": "<what you saw>"}]}',
   "```",
   'If this ticket has nothing a person could see or do in a browser (a pure backend, data or tooling change), don\'t start anything: reply with {"applicable": false, "reason": "<one sentence>", "checks": []}.',
 ].join("\n");
@@ -661,7 +661,7 @@ export function parseWalkthrough(text: string | string[] | undefined): Walkthrou
   try {
     const j = JSON.parse(raw) as Partial<WalkthroughReport>;
     const checks = (Array.isArray(j.checks) ? j.checks : []).slice(0, 30).flatMap(c => c && typeof c.label === "string" ? [{
-      label: c.label.slice(0, 300), status: c.status === "passed" ? "passed" as const : "failed" as const,
+      label: c.label.slice(0, 300), status: c.status === "passed" || c.status === "blocked" ? c.status : "failed" as const,
       ...(typeof c.expected === "string" ? { expected: c.expected.slice(0, 600) } : {}),
       ...(typeof c.actual === "string" ? { actual: c.actual.slice(0, 600) } : {}),
     }] : []);

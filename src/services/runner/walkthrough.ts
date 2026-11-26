@@ -16,10 +16,13 @@ import { runnerJobs } from "../../db/schema/runners.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog } from "../ticket-logs.ts";
 
-export interface WalkthroughCheck { label: string; status: "passed" | "failed"; expected?: string; actual?: string }
+export interface WalkthroughCheck { label: string; status: "passed" | "failed" | "blocked"; expected?: string; actual?: string }
 export interface WalkthroughReport { applicable: boolean; reason?: string; checks: WalkthroughCheck[] }
 
 export const WALKTHROUGH_FPS = 2;
+
+/** A "failed" check whose note says it couldn't be tried at all (older Desktop builds only knew passed or failed). */
+export const COULD_NOT_CHECK = /^\s*(not verifiable|not verified|unverifiable|could ?n[o']?t (be )?(verif|check|test|tr[yi])|cannot (be )?(verif|check|test)|unable to (verif|check|test)|blocked\b)/i;
 const MAX_FRAMES_BYTES = 300 * 1024 * 1024;
 
 export function cleanReport(raw: unknown): WalkthroughReport {
@@ -27,7 +30,8 @@ export function cleanReport(raw: unknown): WalkthroughReport {
   const text = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : undefined);
   const checks = (Array.isArray(r.checks) ? r.checks : []).slice(0, 30).flatMap((c: any) => c && typeof c.label === "string" ? [{
     label: c.label.slice(0, 300),
-    status: c.status === "passed" ? "passed" as const : "failed" as const,
+    status: c.status === "passed" ? "passed" as const
+      : c.status === "blocked" || (typeof c.actual === "string" && COULD_NOT_CHECK.test(c.actual)) ? "blocked" as const : "failed" as const,
     ...(text(c.expected, 600) ? { expected: text(c.expected, 600) } : {}),
     ...(text(c.actual, 600) ? { actual: text(c.actual, 600) } : {}),
   }] : []);
@@ -37,16 +41,28 @@ export function cleanReport(raw: unknown): WalkthroughReport {
 /** The ticket-log line for a walkthrough: the Feature testing step reads its first words. */
 export function walkthroughMessage(report: WalkthroughReport, deviceName: string, url: string | null, video: boolean): string {
   if (!report.applicable) return `Feature testing not applicable: ${report.reason ?? "nothing in this ticket to check in a browser."}`;
+  const n = report.checks.length;
   const passed = report.checks.filter(c => c.status === "passed").length;
-  const ok = report.checks.length > 0 && passed === report.checks.length;
-  const head = ok
-    ? `Feature testing passed on ${deviceName}: all ${report.checks.length} acceptance checks confirmed in the browser.`
-    : report.checks.length
-      ? `Feature testing failed on ${deviceName}: ${passed} of ${report.checks.length} acceptance checks confirmed.`
-      : `Feature testing failed on ${deviceName}: ${report.reason ?? "no checks were reported."}`;
-  const failed = report.checks.filter(c => c.status === "failed").map(c => `- ${c.label}${c.actual ? `: ${c.actual}` : ""}`).join("\n");
+  const blocked = report.checks.filter(c => c.status === "blocked");
+  const outcome = walkthroughOutcome(report);
+  const blockedNote = blocked.length ? `; ${blocked.length} couldn't be checked on this computer` : "";
+  const head = outcome === "passed"
+    ? `Feature testing passed on ${deviceName}: all ${n} acceptance checks confirmed in the browser.`
+    : !n
+      ? `Feature testing failed on ${deviceName}: ${report.reason ?? "no checks were reported."}`
+      : outcome === "incomplete"
+        ? `Feature testing incomplete on ${deviceName}: ${passed} of ${n} acceptance checks confirmed${blockedNote}; none failed.`
+        : `Feature testing failed on ${deviceName}: ${passed} of ${n} acceptance checks confirmed${blockedNote}.`;
+  const failed = report.checks.filter(c => c.status !== "passed")
+    .map(c => `- ${c.status === "blocked" ? "Couldn't check: " : ""}${c.label}${c.actual ? `: ${c.actual}` : ""}`).join("\n");
   const link = url ? `\n\n[Watch recording](${url}/${video ? "recording.mp4" : "status.json"})` : "";
   return head + (failed ? `\n\n${failed}` : "") + link;
+}
+
+/** passed: every check confirmed. incomplete: none failed, but some couldn't be tried here. */
+export function walkthroughOutcome(report: WalkthroughReport): "passed" | "failed" | "incomplete" {
+  if (!report.checks.length || report.checks.some(c => c.status === "failed")) return "failed";
+  return report.checks.some(c => c.status === "blocked") ? "incomplete" : "passed";
 }
 
 /** Concatenated JPEG frames → an MP4 a browser plays (H.264, even dimensions, fast start). */
@@ -106,10 +122,12 @@ export async function handleWalkthroughUpload(req: Request, jobId: string, devic
       await rm(dir, { recursive: true, force: true });
     }
   }
-  const passed = report.checks.length > 0 && report.checks.every(c => c.status === "passed");
-  const step = passed ? "All acceptance checks confirmed" : report.reason ?? "Some acceptance checks failed";
+  const outcome = walkthroughOutcome(report);
+  const step = outcome === "passed" ? "All acceptance checks confirmed"
+    : outcome === "incomplete" ? "Nothing failed, but some acceptance checks couldn't be tried on this computer"
+    : report.reason ?? "Some acceptance checks failed";
   await uploadBinary(`${key}/status.json`, Buffer.from(JSON.stringify({
-    status: passed ? "passed" : "failed", attempt: 1, step,
+    status: outcome, attempt: 1, step,
     checks: report.checks.map(c => ({ label: c.label, status: c.status, expected: c.expected, actual: c.actual })),
     ...(warnings.length ? { warnings } : {}), updatedAt: Date.now(),
   })), "application/json");

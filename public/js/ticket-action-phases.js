@@ -30,7 +30,7 @@
         phases[2].status='working';
         if(phases[0].status==='working')phases[0].status='unknown';
       }
-      if (/^(Feature testing|API test result)/i.test(text)) { active = 2; if(phases[1].status === 'working') phases[1].status = 'done'; phases[2].status = /^Feature testing passed/i.test(text) ? 'done' : /^Feature testing failed/i.test(text) ? 'error' : /^Feature testing not applicable/i.test(text) ? 'not-applicable' : 'working'; }
+      if (/^(Feature testing|API test result)/i.test(text)) { active = 2; if(phases[1].status === 'working') phases[1].status = 'done'; phases[2].status = /^Feature testing passed/i.test(text) ? 'done' : /^Feature testing incomplete/i.test(text) || (/^Feature testing failed/i.test(text) && onlyBlocked(text)) ? 'incomplete' : /^Feature testing failed/i.test(text) ? 'error' : /^Feature testing not applicable/i.test(text) ? 'not-applicable' : 'working'; }
       phases[active].rows.push(row);
       if(/^Validation connection interrupted:/i.test(text))phases[active].status='error';
       if (phases[active].status === 'pending') phases[active].status = 'working';
@@ -53,6 +53,15 @@
   const BUILD_START = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket|Refreshing ticket from )/i;
   const CHECK_ROW = /^Validation check: ([✓✕⚠]) (.+?)(?: \(`([^`]*)`\))?: (passed|failed|fails the same way without this ticket)(?: — ([\s\S]*))?$/;
   const plain = row => String(row.message || '').replace(/^\[(Validation|Feature testing)\]\s*/, '').replace(/\*\*/g, '').trim();
+  // A criterion the walkthrough couldn't try on that computer (a missing key or service) is
+  // not a failure of the feature. Older reports only said "failed", with a note like this.
+  const COULD_NOT_CHECK = /^\s*(not verifiable|not verified|unverifiable|could ?n[o'’]?t (be )?(verif|check|test|tr[yi])|cannot (be )?(verif|check|test)|unable to (verif|check|test)|blocked\b)/i;
+  const blockedCheck = c => c.status === 'blocked' || (c.status === 'failed' && typeof c.actual === 'string' && COULD_NOT_CHECK.test(c.actual));
+  const blockedLine = line => /^Couldn['’]t check: /.test(line) || line.split(/: /).slice(1).some(part => COULD_NOT_CHECK.test(part));
+  function onlyBlocked(text) {
+    const lines = text.split('\n').filter(line => /^- /.test(line)).map(line => line.slice(2).trim());
+    return lines.length > 0 && lines.every(blockedLine);
+  }
   function summary(rows) {
     let checks = [], closed = false, walkthrough = null;
     for (const row of rows) {
@@ -65,14 +74,18 @@
         continue;
       }
       if (/^(✅\s*Validation passed on|❌\s*Checks failed on)/.test(text)) { closed = true; continue; }
-      const w = text.match(/^Feature testing (passed|failed|not applicable)\b/i);
+      const w = text.match(/^Feature testing (passed|failed|incomplete|not applicable)\b/i);
       if (w) {
         const link = text.match(/\((\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+)\/(recording\.mp4|status\.json)\)/);
         const counts = text.match(/(\d+) of (\d+) acceptance checks/) || text.match(/all (\d+) acceptance checks/);
         const total = counts ? +(counts[2] || counts[1]) : 0;
-        const failures = text.split('\n').filter(line => /^- /.test(line)).map(line => line.slice(2).trim());
+        const listed = text.split('\n').filter(line => /^- /.test(line)).map(line => line.slice(2).trim());
+        const failures = listed.filter(line => !blockedLine(line));
+        const blocked = listed.filter(blockedLine).map(line => line.replace(/^Couldn['’]t check: /, ''));
+        const kind = w[1].toLowerCase();
         walkthrough = {
-          status: w[1].toLowerCase() === 'not applicable' ? 'not-applicable' : w[1].toLowerCase(),
+          status: kind === 'not applicable' ? 'not-applicable' : kind === 'failed' && blocked.length && !failures.length ? 'incomplete' : kind,
+          blocked,
           passed: counts ? +counts[1] : 0, total,
           reason: text.split('\n')[0].replace(/^Feature testing (passed|failed|not applicable)( on [^:]+)?:?\s*/i, ''),
           failures, url: link ? link[1] : null, video: !!link && link[2] === 'recording.mp4'
@@ -81,6 +94,7 @@
     }
     return { checks, walkthrough };
   }
+  const OUTCOME_LABEL = { passed: 'Passed', failed: 'Failed', working: 'Running', pending: 'Not started', 'not run': 'Not run', blocked: "Couldn't check" };
   const CHECK_LABEL = { passed: 'Passed', failed: 'Failed', preexisting: 'Already failing' };
   function checksTable(checks) {
     const list = document.createElement('ul'); list.className = 'auto-checks'; list.setAttribute('aria-label', 'Automated checks');
@@ -168,7 +182,7 @@
       if (statuses.includes('error')) return 'error';
       if (statuses.includes('stopped')) return 'stopped';
       if (statuses.includes('working')) return 'working';
-      if (statuses.every(status => ['done', 'not-applicable', 'saved'].includes(status))) return 'done';
+      if (statuses.every(status => ['done', 'not-applicable', 'saved', 'incomplete'].includes(status))) return statuses.includes('incomplete') ? 'incomplete' : 'done';
       if (statuses.some(status => status === 'done')) return running ? 'working' : 'pending';
       return statuses.every(status => status === 'pending') ? 'pending' : 'unknown';
     };
@@ -200,7 +214,7 @@
       button.id = 'phase-tab-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + tab.id;
       const label = document.createElement('strong'); label.textContent = tab.label;
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + tab.status;
-      const statusLabel = tab.status === 'not-applicable' ? 'Not applicable' : tab.status === 'saved' ? 'Saved code' : tab.status[0].toUpperCase() + tab.status.slice(1);
+      const statusLabel = tab.status === 'not-applicable' ? 'Not applicable' : tab.status === 'incomplete' ? "Incomplete: some checks couldn't run here" : tab.status === 'saved' ? 'Saved code' : tab.status[0].toUpperCase() + tab.status.slice(1);
       badge.title = statusLabel; badge.setAttribute('aria-label', statusLabel); badge.setAttribute('role', 'img');
       const paths = {
         done: '<path d="m5 12 4 4L19 6"/>', saved: '<path d="m5 12 4 4L19 6"/>',
@@ -208,7 +222,8 @@
         error: '<path d="m6 6 12 12M18 6 6 18"/>',
         working: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
         unknown: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 4h.01"/>',
-        'not-applicable': '<path d="M5 12h14"/>'
+        'not-applicable': '<path d="M5 12h14"/>',
+        incomplete: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>'
       };
       badge.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[tab.status] || paths.unknown) + '</svg>';
       button.append(label, badge); button.onclick = () => select(tab.id);
@@ -333,14 +348,14 @@
               checklist.replaceChildren();
               const checks=state.checks||[];
               // A failed assertion is what the reader came for: open it once, then leave it to them.
-              if(!openedFailures&&state.status!=='working'){openedFailures=true;checks.forEach((c,i)=>{if(c.status==='failed')expandedChecks.add(String(i)+':'+c.label);});}
-              const counts=document.createElement('li');counts.className='feature-checklist-note';counts.textContent=checks.filter(c=>c.status==='passed').length+' of '+checks.length+' assertions confirmed';checklist.append(counts);
+              if(!openedFailures&&state.status!=='working'){openedFailures=true;checks.forEach((c,i)=>{if(c.status==='failed'||c.status==='blocked')expandedChecks.add(String(i)+':'+c.label);});}
+              const counts=document.createElement('li');counts.className='feature-checklist-note';const notTried=checks.filter(blockedCheck).length;counts.textContent=checks.filter(c=>c.status==='passed').length+' of '+checks.length+' confirmed'+(notTried?' · '+notTried+" couldn't be checked on that computer":'');checklist.append(counts);
               for(const [index,check] of checks.entries()){
-                const outcome=state.status!=='working' && ['pending','working'].includes(check.status)?'not run':check.status;
+                const outcome=state.status!=='working' && ['pending','working'].includes(check.status)?'not run':blockedCheck(check)?'blocked':check.status;
                 const item=document.createElement('li');item.dataset.status=outcome;
                 const assertion=document.createElement('button');assertion.type='button';assertion.className='feature-assertion-select';assertion.dataset.check=String(index)+':'+check.label;
                 assertion.setAttribute('aria-expanded',String(expandedChecks.has(assertion.dataset.check)));
-                const badge=document.createElement('span');badge.className='assertion-outcome';badge.textContent=({passed:'Passed',failed:'Failed',working:'Running',pending:'Not started','not run':'Not run'})[outcome]||outcome;
+                const badge=document.createElement('span');badge.className='assertion-outcome';badge.textContent=OUTCOME_LABEL[outcome]||outcome;
                 const label=document.createElement('span');label.textContent=check.label;assertion.append(badge,label);
                 const evidence=document.createElement('div');evidence.className='assertion-evidence';
                 for(const [label,value] of [['Expected',check.expected],['Observed',check.actual],['Failure',check.error]])if(value){const p=document.createElement('p');const strong=document.createElement('strong');strong.textContent=label+': ';p.append(strong,document.createTextNode(value));evidence.append(p);}
@@ -360,7 +375,10 @@
 
               status.hidden=false;
               const stale=Date.now()-state.updatedAt>45000;
-              status.textContent=(state.status==='working'?(stale?'Waiting for browser update — ':'Live — '):state.status==='passed'?'Passed — ':(state.attempt>1?'Attempt '+state.attempt+' failed — ':'Failed — '))+state.step;
+              const onlyNotTried=checks.length&&checks.every(c=>c.status==='passed'||blockedCheck(c))&&checks.some(blockedCheck);
+              // Older reports said "Some acceptance checks failed" when nothing had actually failed.
+              const step=onlyNotTried&&state.status!=='incomplete'?"nothing failed, but "+checks.filter(blockedCheck).length+" couldn't be tried on that computer":state.step;
+              status.textContent=(state.status==='working'?(stale?'Waiting for browser update — ':'Live — '):state.status==='passed'?'Passed — ':state.status==='incomplete'||onlyNotTried?'Incomplete — ':(state.attempt>1?'Attempt '+state.attempt+' failed — ':'Failed — '))+step;
               frame.onload=()=>{frame.hidden=false;placeholder.hidden=true;};frame.onerror=()=>{if(frame.hidden)placeholder.textContent='Waiting for browser frames; reconnecting…';};frame.src=live[1]+'/live.jpg?t='+Date.now();
               if(state.status!=='working'){
                 frame.hidden=true;frame.onload=null;
@@ -416,19 +434,21 @@
         const bad = automated.filter(c => c.status === 'failed');
         const already = automated.filter(c => c.status === 'preexisting');
         const failedWalk = walk && walk.status === 'failed';
+        const notTried = walk ? walk.blocked.length : 0;
         const parts = [];
         if (automated.length) parts.push('Automated checks: ' + automated.filter(c => c.status === 'passed').length + ' of ' + automated.length + ' passed' + (already.length ? ' (' + already.length + ' already failing before this ticket)' : ''));
-        if (walk) parts.push(walk.status === 'not-applicable' ? 'Walkthrough: nothing to check in a browser' : walk.total ? 'Walkthrough: ' + walk.passed + ' of ' + walk.total + ' acceptance criteria confirmed' : 'Walkthrough: ' + (walk.reason || walk.status));
+        if (walk) parts.push(walk.status === 'not-applicable' ? 'Walkthrough: nothing to check in a browser' : walk.total ? 'Walkthrough: ' + walk.passed + ' of ' + walk.total + ' acceptance criteria confirmed' + (notTried ? ', ' + notTried + " couldn't be checked on that computer" : '') : 'Walkthrough: ' + (walk.reason || walk.status));
         const failedNames = bad.map(c => c.name).concat(failedWalk ? walk.failures.map(f => f.split(':')[0]) : []);
-        verdict[0] = bad.length || failedWalk ? 'error' : 'done';
-        verdict[1] = bad.length || failedWalk ? 'Some checks failed' : 'All checks passed';
-        verdict[2] = parts.join(' · ') + (failedNames.length ? '\nFailed: ' + failedNames.join('; ').slice(0, 300) : '');
+        verdict[0] = bad.length || failedWalk ? 'error' : notTried ? 'incomplete' : 'done';
+        verdict[1] = bad.length || failedWalk ? 'Some checks failed' : notTried ? "Nothing failed, but some criteria couldn't be checked" : 'All checks passed';
+        verdict[2] = parts.join(' · ') + (failedNames.length ? '\nFailed: ' + failedNames.join('; ').slice(0, 300) : '')
+          + (notTried ? "\nCouldn't check: " + walk.blocked.map(b => { const label = b.split(/: (?=\S)/)[0]; return label.length > 70 ? label.slice(0, 68) + '…' : label; }).join('; ') + '. The reasons are under Acceptance walkthrough.' : '');
       }
       const banner = document.createElement('div'); banner.className = 'checks-banner'; banner.dataset.state = verdict[0]; banner.setAttribute('role', 'status');
       const title = document.createElement('strong'); title.textContent = verdict[1];
       const detail = document.createElement('span'); detail.textContent = verdict[2];
       banner.append(title, detail); checksView.append(banner);
-      const stepState = phase => skipped && phase.status !== 'done' ? ['skipped', 'Skipped'] : ({ done:['done','Passed'], error:['error','Failed'], working:['working','Running'], 'not-applicable':['done','Not needed'], saved:['skipped','Skipped'] })[phase.status] || ['pending','Not run'];
+      const stepState = phase => skipped && phase.status !== 'done' ? ['skipped', 'Skipped'] : ({ incomplete:['incomplete','Incomplete'], done:['done','Passed'], error:['error','Failed'], working:['working','Running'], 'not-applicable':['done','Not needed'], saved:['skipped','Skipped'] })[phase.status] || ['pending','Not run'];
       let number = 0;
       for (const phase of checkPhases) {
         const step = document.createElement('section'); step.className = 'checks-step';
@@ -441,7 +461,7 @@
           const failed = automated.some(c => c.status === 'failed');
           step.dataset.state = failed ? 'error' : 'done';
           pill.textContent = automated.filter(c => c.status === 'passed').length + ' of ' + automated.length + ' passed';
-        } else if (phase.id === 'feature-testing' && walk && walk.total && phase.status !== 'working') pill.textContent = walk.passed + ' of ' + walk.total + ' confirmed';
+        } else if (phase.id === 'feature-testing' && walk && walk.total && phase.status !== 'working') pill.textContent = walk.passed + ' of ' + walk.total + ' confirmed' + (walk.blocked.length ? ' · ' + walk.blocked.length + " couldn't check" : '');
         else pill.textContent = label;
         const hint = document.createElement('small'); hint.className = 'checks-step-hint';
         hint.textContent = phase.id === 'validation' ? (auto ? 'Tests, typecheck, lint and build, run on the computer that built it.' : 'The app is started from the saved code.') : 'The agent starts the app and tries each acceptance criterion in a recorded browser.';

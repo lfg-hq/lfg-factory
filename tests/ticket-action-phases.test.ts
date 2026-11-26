@@ -100,3 +100,13 @@ test('summary reads the latest automated checks and walkthrough from the log row
  expect(summary(rows(...old,'Starting ticket build')).checks).toEqual([]);
  expect(summary(rows('Feature testing not applicable: no UI')).walkthrough.status).toBe('not-applicable');
 });
+test('walkthrough criteria that could not be tried read as incomplete, also in older reports',()=>{
+ const {summary,group}=(globalThis as any).TicketActionPhases;
+ const old="Feature testing failed on Mac: 0 of 2 acceptance checks confirmed.\n\n- Test Call follows a structure (Notice, budget): Not verifiable here: no OPENAI_API_KEY\n- Notes before each call: Not verifiable here: no worker";
+ expect(summary(rows(old)).walkthrough).toMatchObject({status:'incomplete',failures:[],blocked:['Test Call follows a structure (Notice, budget): Not verifiable here: no OPENAI_API_KEY','Notes before each call: Not verifiable here: no worker']});
+ expect(group(rows(old),{status:'review'})[2].status).toBe('incomplete');
+ const mixed="Feature testing failed on Mac: 1 of 3 acceptance checks confirmed; 1 couldn't be checked on this computer.\n\n- A: Blank page\n- Couldn't check: B: no key";
+ expect(summary(rows(mixed)).walkthrough).toMatchObject({status:'failed',failures:['A: Blank page'],blocked:['B: no key']});
+ expect(group(rows(mixed),{status:'review'})[2].status).toBe('error');
+ expect(group(rows("Feature testing incomplete on Mac: 1 of 2 acceptance checks confirmed; 1 couldn't be checked on this computer; none failed."),{status:'review'})[2].status).toBe('incomplete');
+});

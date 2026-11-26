@@ -794,13 +794,14 @@
     const icon = { passed: "✓", failed: "✕", preexisting: "⚠" };
     const failed = s.checks.some(c => c.status === "failed") || (w && w.status === "failed");
     const label = document.createElement("span"); label.className = "tb-label";
-    label.innerHTML = '<i class="fas fa-vial" style="color:' + (failed ? "#f87171" : "#4ade80") + ';"></i>';
-    label.append(document.createTextNode(failed ? "Checks: some failed" : "Checks passed"));
+    const notTried = !failed && w && w.status === "incomplete";
+    label.innerHTML = '<i class="fas fa-vial" style="color:' + (failed ? "#f87171" : notTried ? "#fbbf24" : "#4ade80") + ';"></i>';
+    label.append(document.createTextNode(failed ? "Checks: some failed" : notTried ? "Checks: nothing failed, some not checked" : "Checks passed"));
     const parts = [label];
     for (const c of s.checks) parts.push(chip(c.status, icon[c.status] + " " + c.name, (c.status === "preexisting" ? "Already failing before this ticket. " : "") + (c.detail || "")));
     if (w) {
-      const text = w.status === "not-applicable" ? "– Walkthrough not needed" : (w.status === "passed" ? "✓" : "✕") + " Walkthrough" + (w.total ? " " + w.passed + "/" + w.total : "") + (w.video ? " · ▶ video" : "");
-      parts.push(chip(w.status === "not-applicable" ? "na" : w.status, text, w.failures.join("\n")));
+      const text = w.status === "not-applicable" ? "– Walkthrough not needed" : ({ passed: "✓", incomplete: "⚠" }[w.status] || "✕") + " Walkthrough" + (w.total ? " " + w.passed + "/" + w.total : "") + (w.blocked.length ? " · " + w.blocked.length + " couldn't check" : "") + (w.video ? " · ▶ video" : "");
+      parts.push(chip(w.status === "not-applicable" ? "na" : w.status, text, w.failures.concat(w.blocked.map(b => "Couldn't check: " + b)).join("\n")));
     }
     const open = document.createElement("span"); open.className = "tb-open"; open.textContent = "View report →";
     parts.push(open);

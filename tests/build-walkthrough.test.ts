@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseWalkthrough, withRepoLock } from "../desktop/src/runner.ts";
 import { FrameRecorder, allowedUrl } from "../desktop/src/preview-browser.ts";
-import { cleanReport, encodeFrames, walkthroughMessage } from "../src/services/runner/walkthrough.ts";
+import { cleanReport, encodeFrames, walkthroughMessage, walkthroughOutcome } from "../src/services/runner/walkthrough.ts";
 import { buildRunnerPrompt } from "../src/services/runner/ticket-job.ts";
 
 test("the agent's walkthrough report is read from the JSON block at the end", () => {
@@ -29,6 +29,20 @@ test("the ticket log line names the outcome the Feature testing step reads, and 
   expect(fail).toContain("- B: Blank page");
   expect(fail).toContain("/status.json)");
   expect(walkthroughMessage(cleanReport({ applicable: false, reason: "Data migration only" }), "Mac", null, false)).toBe("Feature testing not applicable: Data migration only");
+});
+
+test("a criterion that couldn't be tried on the computer is not a failure of the feature", () => {
+  expect(parseWalkthrough('```json\n{"applicable": true, "checks": [{"label": "Call", "status": "blocked", "actual": "No OpenAI key"}]}\n```')?.checks[0]?.status).toBe("blocked");
+  // Older Desktop builds said "failed" with a note that it couldn't be tried.
+  const old = cleanReport({ checks: [{ label: "A", status: "passed" }, { label: "Call follows structure", status: "failed", actual: "Not verifiable here: no OPENAI_API_KEY" }] });
+  expect(old.checks[1]!.status).toBe("blocked");
+  expect(walkthroughOutcome(old)).toBe("incomplete");
+  const msg = walkthroughMessage(old, "Mac", "/uploads/ticket-tests/t1/r1", true);
+  expect(msg).toStartWith("Feature testing incomplete on Mac: 1 of 2 acceptance checks confirmed; 1 couldn't be checked on this computer; none failed.");
+  expect(msg).toContain("- Couldn't check: Call follows structure: Not verifiable here");
+  const mixed = cleanReport({ checks: [{ label: "A", status: "failed", actual: "Blank page" }, { label: "B", status: "blocked" }] });
+  expect(walkthroughOutcome(mixed)).toBe("failed");
+  expect(walkthroughMessage(mixed, "Mac", null, false)).toStartWith("Feature testing failed on Mac: 0 of 2 acceptance checks confirmed; 1 couldn't be checked on this computer.");
 });
 
 test("recorded frames are written at a steady rate and become an MP4", async () => {
